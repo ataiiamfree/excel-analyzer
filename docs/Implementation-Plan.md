@@ -276,7 +276,6 @@ httpx>=0.25.0
 pandas>=2.1.0
 openpyxl>=3.1.0
 pyarrow>=14.0.0
-duckdb>=0.9.0
 matplotlib>=3.8.0
 tiktoken>=0.5.0
 pydantic>=2.5.0
@@ -410,7 +409,7 @@ python -m app.tools.workbook_ingestor --file messy_workbook.xlsx
 文件：`app/tools/excel_preprocessor.py`
 
 实现要点：
-- 针对 manifest 中的每个 table candidate 读取区域。
+- 双层遍历 manifest 结构 `files[].sheets[].tables[]`，针对每个 table candidate 读取区域。
 - 拆分合并单元格并用左上角值填充，但只在 working copy 中处理。
 - 表头检测返回候选和置信度，不只返回一个行号。
 - 多层表头合并为单层（"采购金额" + "计划" → "采购金额_计划"）。
@@ -784,13 +783,20 @@ while True:
     result = await self._execute_step(step, context, workspace)
     check = checker.validate(step, result, context, workspace)
 
-    if check.status == "failed":
-        result = await self._repair_or_replan(step, result, check, context, workspace)
+    # check 失败时先尝试 repair
+    if check.status == "failed" and not result.retries_exhausted:
+        result = await self._repair_from_check(step, result, check, context, workspace)
+        check = checker.validate(step, result, context, workspace)
 
     context.add_step_summary(step.id, result.stdout, step.description)
     context.update_workspace_files(workspace.list_files())
     context.update_artifacts(workspace.read_artifact_manifest())
     plan.mark_done(step.id, check=check.status)
+
+    # repair 后仍然失败 → 重新规划
+    if (result.failed or check.status == "failed") and result.retries_exhausted:
+        plan = await self._replan(context, step, result.error)
+        continue
 
     # Adaptive: 根据结果调整后续计划
     if self._should_adapt(step, result, plan.remaining_steps()):
@@ -878,7 +884,7 @@ POST /api/task/{id}/rerun-step/{step_id}  重跑某一步
 - 任务状态写入 `workspace/{task_id}/state.json`，不要只存在内存里
 - 进度回报：当前步骤 / 总步骤
 - 文件下载和预览只允许读取 artifact manifest 中登记的文件
-- 支持取消：写入 `cancel_requested`，执行循环在步骤边界检查
+- 支持取消：`POST /cancel` 写入 `state.json` 中 `cancel_requested: true`，Orchestrator 主循环在每个步骤边界调用 `workspace.is_cancel_requested()` 检查，命中则设置 `status: cancelled` 并退出
 
 ### Step 8.2: 前端页面
 文件：`static/index.html`
@@ -966,8 +972,10 @@ uvicorn app.server:app --reload
 ```
 
 ### Step 9.4: 本地日志与可复现
-- 每次 LLM 调用记录：prompt 长度、响应长度、耗时
-- 每步执行记录：步骤 ID、耗时、成功/失败
+- 日志格式统一使用 JSON Lines（每行一个 JSON），便于搜索和分析
+- 日志分三类文件：`logs/llm_calls.jsonl`（LLM 调用）、`logs/steps.jsonl`（步骤执行）、`logs/system.jsonl`（系统事件）
+- 每次 LLM 调用记录：prompt 长度、响应长度、耗时(ms)、token 消耗、调用类型
+- 每步执行记录：步骤 ID、耗时、成功/失败、attempt 次数
 - TaskContext 快照：每步执行后保存 context 状态（便于调试）
 - 保存每次生成代码到 `scripts/`
 - 保存 `state.json / plan.json / profile.json / artifact_manifest.json`
