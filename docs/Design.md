@@ -770,6 +770,16 @@ class Orchestrator:
         self.config = config
         self.assembler = PromptAssembler()
 
+        # ── Skill 执行器注册表 ──
+        # 以字典分发代替 if/elif，新增能力只需注册一行
+        # 后续扩展示例：
+        #   self.executors["graph_rag"] = self._execute_graph_rag
+        #   self.executors["sql"] = self._execute_sql
+        self.executors = {
+            "python": self._execute_python,
+            "knowledge": self._execute_knowledge,
+        }
+
     async def run(self, user_query: str, excel_path: str) -> TaskResult:
         # ── 初始化工作空间 ──
         workspace = Workspace.create()
@@ -882,51 +892,99 @@ class Orchestrator:
         return self._parse_adjustment(response)
 
     async def _execute_step(self, step, context, workspace) -> StepResult:
-        """执行单个步骤，含自愈机制"""
-
-        if step.tool == "knowledge":
-            chunks = self.tools.knowledge.search(step.query, top_k=3)
+        """执行单个步骤 - 通过执行器注册表分发"""
+        executor = self.executors.get(step.tool)
+        if not executor:
             return StepResult(
-                stdout=self._format_knowledge(chunks),
-                files=[], failed=False
+                stdout="", files=[],
+                failed=True, error=f"未注册的 skill 类型: {step.tool}"
             )
+        return await executor(step, context, workspace)
 
-        if step.tool == "python":
-            # 生成代码
-            prompt = self.assembler.assemble(context, step)
-            code = await self.llm.call(prompt)
+    # ── 内置 Skill 执行器 ──
+
+    async def _execute_knowledge(self, step, context, workspace) -> StepResult:
+        """知识检索 skill"""
+        chunks = self.tools.knowledge.search(step.query, top_k=3)
+        return StepResult(
+            stdout=self._format_knowledge(chunks),
+            files=[], failed=False
+        )
+
+    async def _execute_python(self, step, context, workspace) -> StepResult:
+        """Python 代码生成 + 执行 skill，含自愈机制"""
+        # 生成代码
+        prompt = self.assembler.assemble(context, step)
+        code = await self.llm.call(prompt)
+        code = self._extract_code_block(code)
+
+        # 执行
+        exec_result = self.tools.sandbox.execute(
+            code=code, workdir=workspace.path,
+            step_id=step.id, attempt=0, timeout=60
+        )
+        workspace.record_code(step.id, exec_result.script_path, attempt=0)
+
+        # 自愈：最多 2 次
+        for attempt in range(self.config.max_repair_attempts):
+            if exec_result.success:
+                break
+            repair_prompt = self.assembler.assemble_repair(
+                context, step, code, exec_result.stderr
+            )
+            code = await self.llm.call(repair_prompt)
             code = self._extract_code_block(code)
-
-            # 执行
             exec_result = self.tools.sandbox.execute(
                 code=code, workdir=workspace.path,
-                step_id=step.id, attempt=0, timeout=60
+                step_id=step.id, attempt=attempt + 1, timeout=60
             )
-            workspace.record_code(step.id, exec_result.script_path, attempt=0)
+            workspace.record_code(step.id, exec_result.script_path, attempt=attempt + 1)
 
-            # 自愈：最多 2 次
-            for attempt in range(2):
-                if exec_result.success:
-                    break
-                repair_prompt = self.assembler.assemble_repair(
-                    context, step, code, exec_result.stderr
-                )
-                code = await self.llm.call(repair_prompt)
-                code = self._extract_code_block(code)
-                exec_result = self.tools.sandbox.execute(
-                    code=code, workdir=workspace.path,
-                    step_id=step.id, attempt=attempt + 1, timeout=60
-                )
-                workspace.record_code(step.id, exec_result.script_path, attempt=attempt + 1)
-
-            return StepResult(
-                stdout=exec_result.stdout,
-                files=exec_result.output_files,
-                script_path=exec_result.script_path,
-                failed=not exec_result.success,
-                retries_exhausted=not exec_result.success
-            )
+        return StepResult(
+            stdout=exec_result.stdout,
+            files=exec_result.output_files,
+            script_path=exec_result.script_path,
+            failed=not exec_result.success,
+            retries_exhausted=not exec_result.success
+        )
 ```
+
+### 4.1.1 Skill 扩展机制
+
+当前版本内置两个 Skill（`python` 和 `knowledge`）。后续新增能力只需三步：
+
+1. **写一个执行器方法**（或独立类）
+2. **注册到 `self.executors`**
+3. **在 Planner prompt 中描述该 Skill 的能力**（让 Planner 知道什么时候该用它）
+
+已规划的扩展方向：
+
+```python
+# ── 后续扩展示例（不在 v1 实现）──
+
+async def _execute_graph_rag(self, step, context, workspace) -> StepResult:
+    """GraphRAG 知识图谱检索 skill
+
+    适用场景：用户提出的分析需求涉及领域知识（如采购法规、行业标准、历史决策），
+    需要从知识图谱中检索相关实体和关系来辅助分析。
+
+    与 knowledge skill 的区别：
+    - knowledge: 简单向量检索，返回文本片段
+    - graph_rag:  实体-关系检索，返回结构化知识子图 + 推理路径
+    """
+    # 1. 从 step 中提取检索意图
+    query = step.instruction
+    # 2. 调用 GraphRAG 检索（实体抽取 → 子图查询 → 路径排序）
+    result = self.tools.graph_rag.search(query, top_k=5)
+    # 3. 格式化为 LLM 可读的结构化知识
+    formatted = self._format_graph_knowledge(result)
+    return StepResult(stdout=formatted, files=[], failed=False)
+
+# 注册
+self.executors["graph_rag"] = self._execute_graph_rag
+```
+
+Planner 在生成计划时会看到所有已注册 Skill 的描述，自动决定每一步用哪个 Skill。`step.tool` 字段与注册表的 key 对应。
 
 ### 4.2 Planner（规划器）
 

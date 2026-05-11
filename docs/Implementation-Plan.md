@@ -637,7 +637,7 @@ def read_artifact_manifest() -> list[dict]: ...
 @dataclass
 class Step:
     id: str
-    tool: str            # "python" | "knowledge"
+    tool: str            # 对应 Orchestrator.executors 的 key: "python" | "knowledge" | 后续扩展 "graph_rag" 等
     description: str     # 步骤描述
     instruction: str     # 详细指令（给代码生成用）
     depends_on: list     # 依赖的步骤 ID
@@ -688,6 +688,9 @@ Prompt 模板（`app/prompts/system_planner.md`）：
 实现要点：
 - 驱动 Profiler → Planner → 逐步执行 的流程
 - 主循环用 `while plan.next_runnable_step()`，不要遍历时修改 `plan.steps`
+- `_execute_step` 通过 `self.executors` 字典分发，不用 if/elif（见 Design.md §4.1.1 Skill 扩展机制）
+- v1 注册两个内置执行器：`python`（代码生成+沙箱执行）和 `knowledge`（向量检索）
+- 后续新增 Skill（如 `graph_rag`）只需写执行器方法 + 注册一行
 - 每步执行后更新 TaskContext
 - 每步执行后更新 artifact manifest 和 state.json
 - 失败重试（Repair）
