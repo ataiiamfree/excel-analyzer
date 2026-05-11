@@ -25,3 +25,6 @@ psutil>=5.9.0
 
 # 环境变量
 python-dotenv>=1.0.0
+
+# 交互层
+chainlit>=1.1.0

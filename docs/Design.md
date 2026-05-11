@@ -37,38 +37,49 @@
 ### 1.2 核心架构图
 
 ```
-用户请求（上传 Excel + 问题）
+┌─────────────────────────────────────────────────────────────┐
+│                    Chainlit 交互层                            │
+│                                                             │
+│  用户 ←→ 聊天界面（上传 Excel / 提问 / 追问 / 查看结果）       │
+│           │                                                 │
+│           │  对话历史（自动持久化）                             │
+│           │  跨会话记忆（user_memory.json）                    │
+│           │                                                 │
+│  ┌────────▼──────────┐                                      │
+│  │  Session 管理       │  管理会话状态、追问复用、对话摘要       │
+│  └────────┬──────────┘                                      │
+└───────────┼─────────────────────────────────────────────────┘
             │
+            │  首次分析: 完整流程
+            │  追问:     跳过预处理，复用 profile + normalized
             ▼
     ┌───────────────────┐
-    │ WorkbookIngestor   │  ← 文件检查、sheet 扫描、表格区域检测、生成 workbook manifest
-    │ (纯代码 + 规则)     │
+    │ WorkbookIngestor   │  ← 文件检查、sheet 扫描、表格区域检测
+    │ (纯代码 + 规则)     │     生成 workbook manifest
     └───────┬───────────┘
             │ raw workbook + manifest
             ▼
     ┌───────────────────┐
-    │ ExcelPreprocessor  │  ← 对每个表格区域做 normalized 输出（不破坏 raw）
-    │ (纯代码 + 规则)     │     合并单元格、表头识别、汇总行标记、类型标准化
+    │ ExcelPreprocessor  │  ← 合并单元格、表头识别、汇总行标记
+    │ (纯代码 + 规则)     │     输出 normalized tables
     └───────┬───────────┘
             │ normalized tables + preprocess report
             ▼
     ┌───────────────┐
-    │  Orchestrator  │  ← 核心调度器，驱动整个流程
+    │  Orchestrator  │  ← 核心调度器，驱动 Adaptive Plan-Execute
     │  (纯代码逻辑)   │
     └───────┬───────┘
             │
-            │  管理 TaskContext + Artifact Manifest（步骤间的信息桥梁）
+            │  管理 TaskContext + Artifact Manifest
             │
     ┌───────▼────────────────────────────────────────────┐
     │                  TaskContext                        │
     │                                                    │
     │  ┌─────────────┐  ┌─────────────┐  ┌───────────┐  │
     │  │ 固定区       │  │ 摘要区       │  │ 产物区    │  │
-    │  │             │  │             │  │           │  │
     │  │ user_query  │  │ step_results│  │ artifacts │  │
     │  │ profile     │  │ (每步≤N字)  │  │ 文件/血缘   │  │
     │  │ plan        │  │ key_findings│  │           │  │
-    │  │             │  │ (≤N条)     │  │           │  │
     │  └─────────────┘  └─────────────┘  └───────────┘  │
     │                                                    │
     │  总预算上限：从 BUDGET_PRESETS 读取（默认 generous）   │
@@ -77,7 +88,7 @@
             │  每一步从 TaskContext 取所需信息 → 组装独立 Prompt
             │
     ┌───────▼───────────────────────────────────────┐
-    │              Step 执行（每步独立调用 LLM）        │
+    │    Step 执行（每步独立调用 LLM，通过执行器分发）    │
     │                                               │
     │  ┌─────────┐  ┌─────────┐  ┌──────────────┐  │
     │  │ Planner │  │CodeGen  │  │ Reporter     │  │
@@ -96,8 +107,8 @@
     │       │    └────────────────┘       │          │
     │       │                            │          │
     │  ┌────▼────────────────────────────▼───┐      │
-    │  │        Knowledge Retriever          │      │
-    │  │        知识库检索（按需调用）          │      │
+    │  │     Skill 执行器注册表                │      │
+    │  │  python | knowledge | graph_rag ... │      │
     │  └─────────────────────────────────────┘      │
     └───────────────────────────────────────────────┘
 ```
@@ -1454,12 +1465,13 @@ excel-analyzer/
 │
 ├── app/
 │   ├── __init__.py
-│   ├── server.py                   # FastAPI 入口
+│   ├── main.py                     # Chainlit 入口（chainlit run app/main.py）
 │   ├── workspace.py                # 本地任务目录、state、artifact manifest
+│   ├── session.py                  # Session 管理（多轮对话、追问复用）
 │   │
 │   ├── agent/
 │   │   ├── __init__.py
-│   │   ├── orchestrator.py         # 核心调度器
+│   │   ├── orchestrator.py         # 核心调度器（Skill 执行器注册表）
 │   │   ├── planner.py              # 规划器
 │   │   └── reporter.py             # 报告生成器
 │   │
@@ -1489,13 +1501,17 @@ excel-analyzer/
 │       ├── system_repair.md        # 修复系统提示词
 │       └── system_reporter.md      # 报告生成系统提示词
 │
-├── static/
-│   └── index.html                  # 前端页面
+├── memory/
+│   └── user_memory.json            # 跨会话记忆（用户偏好、已知 schema）
 │
-├── workspace/                      # 运行时工作目录
+├── .chainlit/
+│   └── config.toml                 # Chainlit 配置（UI、对话历史等）
+│
+├── workspace/                      # 运行时工作目录（git 忽略）
 ├── requirements.txt
 ├── docs/
-│   └── Design.md                   # 本文档
+│   ├── Design.md                   # 本文档
+│   └── Implementation-Plan.md
 └── README.md
 ```
 
@@ -1595,4 +1611,293 @@ class LLMClient:
                 content = message["reasoning_content"]
 
             return content
+```
+
+---
+
+## 九、Session 管理与交互层
+
+### 9.1 交互层：Chainlit
+
+当前版本使用 [Chainlit](https://docs.chainlit.io/) 作为交互层，替代手写 FastAPI + HTML 前端。
+
+选择 Chainlit 的理由：
+- 原生支持文件上传、Markdown 渲染、图表嵌入、文件下载
+- 内置对话历史持久化（用户重新打开页面可回溯历史会话）
+- Step 折叠展示（每个分析步骤的进度实时可见）
+- 底层是 FastAPI，仍然可以暴露 REST API 给其他系统调用
+- 开发量极小，核心逻辑不变
+
+```python
+import chainlit as cl
+
+@cl.on_chat_start
+async def start():
+    """会话开始：让用户上传 Excel"""
+    files = await cl.AskFileMessage(
+        content="请上传 Excel 文件",
+        accept=["application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"],
+        max_size_mb=100,
+    ).send()
+    # 保存到 session
+    session = Session.create(file=files[0])
+    cl.user_session.set("session", session)
+    await cl.Message(content=f"已上传 **{files[0].name}**，请输入你的分析需求。").send()
+
+@cl.on_message
+async def main(message: cl.Message):
+    """接收用户消息，执行分析"""
+    session = cl.user_session.get("session")
+
+    # 判断是首次分析还是追问
+    is_follow_up = len(session.tasks) > 0
+
+    # 创建任务
+    task_id = session.create_task(message.content, is_follow_up=is_follow_up)
+
+    # 执行分析，每步用 cl.Step 展示进度
+    async with cl.Step(name="理解 Excel 结构") as step:
+        # ... ingestor + preprocessor ...
+        step.output = f"检测到 {n_tables} 个数据表"
+
+    async with cl.Step(name="生成分析计划") as step:
+        # ... planner ...
+        step.output = f"计划 {n_steps} 个步骤"
+
+    # 逐步执行
+    for step_info in plan.steps:
+        async with cl.Step(name=step_info.description) as step:
+            # ... execute ...
+            step.output = result.summary
+
+    # 发送报告
+    await cl.Message(content=report_markdown).send()
+
+    # 发送图表和文件
+    elements = []
+    for chart in charts:
+        elements.append(cl.Image(path=chart, name=os.path.basename(chart)))
+    for file in download_files:
+        elements.append(cl.File(path=file, name=os.path.basename(file)))
+
+    if elements:
+        await cl.Message(content="分析产物：", elements=elements).send()
+
+    # 更新 session
+    session.finish_task(task_id)
+```
+
+### 9.2 Session 管理
+
+Session 解决的问题：**用户在同一次会话中可以追问，不需要重新上传文件和重新预处理。**
+
+```python
+@dataclass
+class Session:
+    """一次用户会话，可包含多轮任务"""
+    session_id: str
+    file_path: str                      # 当前分析的 Excel 文件
+    tasks: list[str]                    # [task_001, task_002, ...]
+    conversation_summary: str           # 对话摘要（给 Planner 看）
+    accumulated_findings: list[str]     # 跨任务的关键发现
+
+    # ══════ 首次上传时生成，后续追问复用 ══════
+    workbook_manifest: dict | None = None
+    profile: dict | None = None
+    normalized_dir: str | None = None   # normalized/ 目录路径
+
+    @classmethod
+    def create(cls, file) -> "Session":
+        session_id = f"session_{uuid4().hex[:8]}"
+        return cls(
+            session_id=session_id,
+            file_path=file.path,
+            tasks=[],
+            conversation_summary="",
+            accumulated_findings=[],
+        )
+
+    def create_task(self, query: str, is_follow_up: bool = False) -> str:
+        """创建新任务，追问时复用已有 profile 和 normalized 数据"""
+        task_id = f"task_{len(self.tasks) + 1:03d}"
+        self.tasks.append(task_id)
+        return task_id
+
+    def build_follow_up_context(self) -> dict:
+        """为追问任务构建上下文"""
+        prev_task = self.tasks[-2]  # 上一个任务
+        return {
+            "prior_profile": self.profile,
+            "prior_normalized_dir": self.normalized_dir,
+            "prior_outputs": f"workspace/{prev_task}/output/",
+            "prior_findings": self.accumulated_findings[-20:],
+            "conversation_summary": self.conversation_summary,
+        }
+
+    def update_after_task(self, task_id: str, findings: list[str], summary: str):
+        """任务完成后更新 session 状态"""
+        self.accumulated_findings.extend(findings)
+        self.accumulated_findings = self.accumulated_findings[-30:]  # 保留最近 30 条
+        # 追加到对话摘要
+        self.conversation_summary += f"\n[{task_id}] {summary}"
+        # 对话摘要限制长度
+        if len(self.conversation_summary) > 2000:
+            self.conversation_summary = self.conversation_summary[-1500:]
+```
+
+### 9.3 追问（多轮对话）的执行流程
+
+```
+首次提问: "分析采购时长"
+  Ingestor → Preprocessor → Profiler → Plan → Execute → Report
+  ↓ session 保存 profile、normalized_dir、findings
+
+追问: "再按部门细分一下"
+  （跳过 Ingestor/Preprocessor/Profiler，复用 session 中的数据）
+  → Plan（输入包含 conversation_summary + prior_findings + prior_outputs）
+  → Execute（可以直接读取上轮 output/ 中的中间结果）
+  → Report
+
+追问: "把超过 100 天的明细导出 Excel"
+  （同样跳过预处理，复用数据）
+  → Plan → Execute → 导出文件
+```
+
+Orchestrator 中的分支逻辑：
+
+```python
+async def run(self, query: str, session: Session) -> TaskResult:
+    task_id = session.create_task(query)
+    workspace = Workspace.create(task_id)
+
+    if session.profile is not None:
+        # ── 追问模式：复用已有数据 ──
+        profile = session.profile
+        workspace.link_normalized(session.normalized_dir)  # 软链接/复制
+        follow_up = session.build_follow_up_context()
+
+        context = TaskContext(
+            task_id=task_id,
+            user_query=query,
+            data_profile=profile,
+            workbook_manifest=session.workbook_manifest,
+            prior_findings=follow_up["prior_findings"],
+            conversation_summary=follow_up["conversation_summary"],
+        )
+    else:
+        # ── 首次分析：完整流程 ──
+        workbook_manifest = self.tools.ingestor.scan(...)
+        preprocess_result = self.tools.preprocessor.process(...)
+        profile = self.tools.profiler.profile(...)
+
+        # 保存到 session，后续追问复用
+        session.workbook_manifest = workbook_manifest
+        session.profile = profile
+        session.normalized_dir = workspace.normalized_dir
+
+        context = TaskContext(
+            task_id=task_id,
+            user_query=query,
+            data_profile=profile,
+            workbook_manifest=workbook_manifest,
+        )
+
+    # 后续流程相同：Plan → Execute → Adapt → Report
+    plan = await self._plan(context)
+    # ...
+```
+
+### 9.4 对话记录持久化
+
+Chainlit 内置了对话历史功能，配置即可：
+
+```toml
+# .chainlit/config.toml
+[project]
+name = "Excel 智能分析"
+enable_telemetry = false
+
+[features]
+prompt_playground = false
+
+[UI]
+name = "Excel 智能分析 Agent"
+description = "上传 Excel，用自然语言分析数据"
+```
+
+对话历史自动存储在本地，用户重新打开页面时左侧栏显示历史会话列表。
+
+### 9.5 跨会话记忆
+
+用一个 JSON 文件存储用户偏好和已知 schema，不搞复杂的记忆系统：
+
+```python
+# memory/user_memory.json
+{
+    "preferences": {
+        "chart_font": "SimHei",
+        "report_style": "detailed",
+        "export_format": "xlsx"
+    },
+    "known_schemas": {
+        "采购台账": {
+            "fingerprint": "hash_of_column_names",
+            "常用维度": ["项目类别", "采购方式", "承办部门"],
+            "时间字段": ["公告发出时间", "中标通知书发出时间"],
+            "金额字段": ["采购金额"],
+            "last_seen": "2025-05-11"
+        }
+    },
+    "recent_sessions": [
+        {
+            "session_id": "session_a1b2c3d4",
+            "file": "采购台账2025.xlsx",
+            "queries": ["分析采购时长", "按部门细分"],
+            "date": "2025-05-11"
+        }
+    ]
+}
+```
+
+**known_schemas 的用途**：
+- 用户第二次上传类似结构的 Excel 时，Profiler 可以匹配已知 schema
+- Planner 能直接引用"上次这类文件的常用分析维度"，规划更精准
+- 列名映射更准确（知道"采购金额"是金额字段而不是普通文本）
+
+```python
+class UserMemory:
+    """跨会话记忆 - 读写 memory/user_memory.json"""
+
+    def __init__(self, path: str = "memory/user_memory.json"):
+        self.path = path
+        self.data = self._load()
+
+    def match_schema(self, columns: list[str]) -> dict | None:
+        """用列名指纹匹配已知 schema"""
+        fingerprint = self._hash_columns(columns)
+        for name, schema in self.data["known_schemas"].items():
+            if schema["fingerprint"] == fingerprint:
+                return schema
+        return None
+
+    def save_schema(self, name: str, columns: list[str], dimensions: list[str]):
+        """保存新的 schema"""
+        self.data["known_schemas"][name] = {
+            "fingerprint": self._hash_columns(columns),
+            "常用维度": dimensions,
+            "last_seen": datetime.now().strftime("%Y-%m-%d"),
+        }
+        self._save()
+
+    def add_session_record(self, session_id: str, file: str, queries: list[str]):
+        """记录会话历史"""
+        self.data["recent_sessions"].append({
+            "session_id": session_id,
+            "file": file,
+            "queries": queries,
+            "date": datetime.now().strftime("%Y-%m-%d"),
+        })
+        # 只保留最近 50 条
+        self.data["recent_sessions"] = self.data["recent_sessions"][-50:]
+        self._save()
 ```

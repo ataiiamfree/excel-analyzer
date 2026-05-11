@@ -4,7 +4,7 @@ install:
 	pip install -r requirements.txt
 
 run:
-	uvicorn app.server:app --reload --host 0.0.0.0 --port 8000
+	chainlit run app/main.py --host 0.0.0.0 --port 8000
 
 test:
 	python -m pytest tests/ -v

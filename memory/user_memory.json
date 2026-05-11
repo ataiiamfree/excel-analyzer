@@ -1,0 +1,9 @@
+{
+    "preferences": {
+        "chart_font": "SimHei",
+        "report_style": "detailed",
+        "export_format": "xlsx"
+    },
+    "known_schemas": {},
+    "recent_sessions": []
+}

@@ -30,7 +30,8 @@ cp .env.example .env
 
 ```bash
 make run
-# 浏览器打开 http://localhost:8000
+# 浏览器自动打开 http://localhost:8000
+# 上传 Excel → 输入分析需求 → 查看报告 → 可追问
 ```
 
 ### 4. 测试
@@ -43,13 +44,15 @@ make test
 
 ```
 app/
+├── main.py         # Chainlit 入口
+├── session.py      # 会话管理（追问复用、对话摘要）
 ├── agent/          # 编排器、规划器、报告生成
 ├── context/        # TaskContext、PromptAssembler、摘要提取
 ├── tools/          # WorkbookIngestor、ExcelPreprocessor、Profiler、沙箱、ResultChecker
 ├── llm/            # LLM 客户端
 └── prompts/        # 系统提示词模板
+memory/             # 跨会话记忆（用户偏好、已知 schema）
 tests/              # 测试
-static/             # 前端页面
 workspace/          # 运行时任务目录（不进 git）
 docs/               # 设计文档
 ```
