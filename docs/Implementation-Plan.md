@@ -316,8 +316,8 @@ class Config:
     llm_api_key: str = os.getenv("DEEPSEEK_API_KEY", "")
     # 不要把 sk-... 写进代码或文档；本地用 .env / shell 环境变量注入
 
-    # Token 预算方案: "standard"(32K窗口) | "generous"(128K+窗口)
-    budget_preset: str = "generous"
+    # Token 预算方案: "standard"(32K窗口) | "generous"(128K+窗口) | "deepseek"(DeepSeek V4 Pro)
+    budget_preset: str = os.getenv("BUDGET_PRESET", "generous")
 
     # 工作空间
     workspace_dir: str = "./workspace"
