@@ -28,7 +28,7 @@
 - **LLM 只做决策，不做搬运**：数据在沙箱里流转，LLM 只看摘要
 - **每次 LLM 调用都是独立的**：无持久对话，无上下文累积
 - **TaskContext + Artifact Manifest 是信息桥梁**：步骤间通过结构化摘要、文件产物和 lineage 传递信息，有严格大小预算
-- **单次调用 token 有硬上限**：任何一次 LLM 调用的输入不超过预算上限（standard: 4K / generous: 16K，见 §二 Token 预算配置）
+- **单次调用 token 有硬上限**：任何一次 LLM 调用的输入不超过预算上限（standard: 4K / generous: 16K，见第六章 Token 预算全景）
 - **Adaptive Plan-Execute 编排**：先粗略规划全局，每步执行后根据实际结果动态细化下一步（详见 Implementation-Plan.md 第〇章）
 - **原始文件不可变**：永远保留 raw workbook，所有清洗、拆表、派生字段都写入新的 normalized/artifact 文件
 - **结果先校验再报告**：代码跑通不等于分析正确，关键步骤必须经过结构化结果检查
@@ -1476,6 +1476,14 @@ GET /api/task/{task_id}/preview/{filename}
 下载和预览接口必须只允许访问当前 task 的 `output/`、`normalized/` 和 manifest 登记文件，不能用用户传入路径直接拼接。
 
 ### 8.2 LLM Client 接口
+
+当前版本默认使用 DeepSeek API，但配置必须通过环境变量注入，不能把 API key 写进代码、文档或 prompt 日志。
+
+```bash
+export DEEPSEEK_BASE_URL="https://api.deepseek.com"
+export DEEPSEEK_MODEL="deepseek-v4-pro"
+export DEEPSEEK_API_KEY="..."
+```
 
 ```python
 class LLMClient:

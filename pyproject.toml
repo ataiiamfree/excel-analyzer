@@ -1,0 +1,11 @@
+[project]
+name = "excel-analyzer"
+version = "0.1.0"
+description = "Excel 智能分析 Agent - Adaptive Plan-Execute 架构"
+requires-python = ">=3.10"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short"

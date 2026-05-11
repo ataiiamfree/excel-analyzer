@@ -305,12 +305,16 @@ class LLMClient:
 文件：`app/config.py`
 
 ```python
+import os
+from dataclasses import dataclass
+
 @dataclass
 class Config:
     # LLM 配置
-    llm_base_url: str = "http://localhost:8001"
-    llm_model: str = "local-chatexcel-model"
-    llm_api_key: str = ""          # 内网模型通常为空；如需鉴权从环境变量读取
+    llm_base_url: str = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
+    llm_model: str = os.getenv("DEEPSEEK_MODEL", "deepseek-v4-pro")
+    llm_api_key: str = os.getenv("DEEPSEEK_API_KEY", "")
+    # 不要把 sk-... 写进代码或文档；本地用 .env / shell 环境变量注入
 
     # Token 预算方案: "standard"(32K窗口) | "generous"(128K+窗口)
     budget_preset: str = "generous"
@@ -979,7 +983,7 @@ uvicorn app.server:app --reload
 - TaskContext 快照：每步执行后保存 context 状态（便于调试）
 - 保存每次生成代码到 `scripts/`
 - 保存 `state.json / plan.json / profile.json / artifact_manifest.json`
-- 提供 `python -m app.agent.rerun --task-id ... --step-id ...` 便于单步复现
+- 提供 `python -m app.agent.rerun --id ... --step ...` 便于单步复现
 
 ### Step 9.5: 配置外部化
 - LLM 相关配置：base_url、model、temperature、max_tokens

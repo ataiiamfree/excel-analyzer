@@ -1,0 +1,27 @@
+# Web 框架
+fastapi>=0.104.0
+uvicorn>=0.24.0
+python-multipart>=0.0.6
+
+# LLM 调用
+httpx>=0.25.0
+
+# 数据处理
+pandas>=2.1.0
+openpyxl>=3.1.0
+pyarrow>=14.0.0
+
+# 图表
+matplotlib>=3.8.0
+
+# Token 计数
+tiktoken>=0.5.0
+
+# 数据模型
+pydantic>=2.5.0
+
+# 系统监控（沙箱内存限制）
+psutil>=5.9.0
+
+# 环境变量
+python-dotenv>=1.0.0
