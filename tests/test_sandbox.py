@@ -1,3 +1,5 @@
+import sys
+
 import pytest
 
 from app.tools.python_sandbox import PythonSandbox, SandboxPolicyError
@@ -54,6 +56,11 @@ def test_execute_safe_script(tmp_path):
     )
     assert result.success is True
     assert "hello" in result.stdout
+
+
+def test_default_python_executable_matches_current_runtime():
+    sandbox = PythonSandbox()
+    assert sandbox.python_executable == sys.executable
 
 
 def test_execute_timeout(tmp_path):

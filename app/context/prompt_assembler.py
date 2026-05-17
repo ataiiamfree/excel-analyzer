@@ -51,6 +51,46 @@ class PromptAssembler:
             parts.append(f"## 结果校验失败信息\n{check_report[-2000:]}")
         return "\n\n".join(parts)
 
+    def assemble_adapt(
+        self,
+        context: TaskContext,
+        step: Step,
+        step_stdout: str,
+    ) -> str:
+        """组装 Adapt prompt：轻量 LLM 调用，根据执行结果调整后续计划。"""
+        remaining = ""
+        if context.plan:
+            remaining = context.plan.remaining_steps_overview()
+
+        parts = [
+            (
+                "你是任务规划助手。刚执行完一个分析步骤，请根据结果判断后续计划是否需要调整。\n\n"
+                "## 判断原则\n"
+                "- 如果结果揭示了新的信息（如具体阈值、数据分布特征），后续步骤应该利用这些信息\n"
+                "- 如果发现了计划中未预料到的情况，可以插入新步骤\n"
+                "- 如果发现某些计划步骤已经没有必要，可以跳过\n"
+                "- 如果不需要调整，返回空调整\n\n"
+                "只输出 JSON，不要解释。"
+            ),
+            f"## 用户问题\n{context.user_query}",
+            f"## 刚完成的步骤\n{step.id}: {step.description}",
+            f"## 步骤执行结果摘要\n{(step_stdout or '')[:2000]}",
+            f"## 剩余计划\n{remaining or '无剩余步骤'}",
+        ]
+        if context.key_findings:
+            parts.append(f"## 已发现的关键信息\n{self._format_json(context.key_findings)}")
+
+        parts.append(
+            '## 输出格式\n```json\n{\n'
+            '  "next_step_adjusted": "修改后的下一步指令（null 表示不修改）",\n'
+            '  "insert_steps": [{"id": "新步骤ID", "tool": "python", '
+            '"description": "描述", "instruction": "指令"}],\n'
+            '  "skip_steps": ["要跳过的步骤ID"],\n'
+            '  "reasoning": "调整原因"\n'
+            "}\n```"
+        )
+        return "\n\n".join(parts)
+
     def _build_sections(self, context: TaskContext, current_step: Step) -> list[PromptSection]:
         sections = [
             PromptSection("system", self._load_system_prompt(current_step.tool)),

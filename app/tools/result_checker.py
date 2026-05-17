@@ -40,7 +40,7 @@ class ResultChecker:
             self._check_expected_outputs(step, workspace),
             self._check_output_files_readable(workspace, exec_result),
         ]
-        checks.extend(self._check_basic_invariants(step, context, workspace))
+        checks.extend(self._check_basic_invariants(step, exec_result, context, workspace))
         failed = any(check.status == "failed" for check in checks)
         warnings = [check.message for check in checks if check.status == "warning"]
         return CheckResult(
@@ -51,7 +51,10 @@ class ResultChecker:
         )
 
     def _check_process_success(self, exec_result: Any) -> CheckItem:
-        if getattr(exec_result, "success", False):
+        success = getattr(exec_result, "success", None)
+        if success is None:
+            success = not getattr(exec_result, "failed", True)
+        if success:
             return CheckItem("process_success", "passed")
         return CheckItem("process_success", "failed", getattr(exec_result, "stderr", ""))
 
@@ -78,7 +81,10 @@ class ResultChecker:
 
     def _check_output_files_readable(self, workspace: Any, exec_result: Any) -> CheckItem:
         """验证输出文件是否存在且可读。"""
-        output_files = getattr(exec_result, "output_files", []) or []
+        output_files = getattr(exec_result, "output_files", None)
+        if output_files is None:
+            output_files = getattr(exec_result, "files", [])
+        output_files = output_files or []
         if not output_files:
             return CheckItem("output_files_readable", "passed")
         unreadable = []
@@ -99,11 +105,17 @@ class ResultChecker:
             return CheckItem("output_files_readable", "failed", f"输出文件不可读: {unreadable}")
         return CheckItem("output_files_readable", "passed")
 
-    def _check_basic_invariants(self, step: Any, context: Any, workspace: Any) -> list[CheckItem]:
+    def _check_basic_invariants(
+        self,
+        step: Any,
+        exec_result: Any,
+        context: Any,
+        workspace: Any,
+    ) -> list[CheckItem]:
         """基础不变量校验：筛选行数、聚合总和等。"""
         checks: list[CheckItem] = []
         instruction = getattr(step, "instruction", "") or ""
-        stdout = ""
+        stdout = getattr(exec_result, "stdout", "") or ""
         # 从 context 的最新 step summary 中提取信息
         summaries = getattr(context, "step_summaries", {})
         step_id = getattr(step, "id", "")

@@ -72,6 +72,29 @@ def test_prompt_budget_compresses_named_summary_section():
     assert "_history" in context.step_summaries or len(context.step_summaries) <= 4
 
 
+def test_assemble_adapt_includes_key_sections():
+    step = Step(id="s1", tool="python", description="统计时长", instruction="计算采购时长")
+    context = TaskContext(
+        task_id="t1",
+        user_query="分析采购时长",
+        workbook_manifest={},
+        data_profile={},
+        plan=ExecutionPlan([
+            step,
+            Step(id="s2", tool="python", description="报告", instruction="生成报告"),
+        ]),
+    )
+    context.key_findings = ["平均时长 42 天"]
+
+    prompt = PromptAssembler().assemble_adapt(context, step, "平均时长 42 天，标准差 28 天")
+
+    assert "任务规划助手" in prompt
+    assert "分析采购时长" in prompt
+    assert "统计时长" in prompt
+    assert "平均时长 42 天" in prompt
+    assert "insert_steps" in prompt  # 输出格式说明
+
+
 def test_degradable_sections_removed_when_over_budget():
     """当压缩摘要和文件列表都不够时，应逐个移除 degradable 段。"""
     BUDGET_PRESETS["tight"] = {

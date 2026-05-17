@@ -10,10 +10,15 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
 
-from app.agent.plan import ExecutionPlan, Step
+import json
+import logging
+
+from app.agent.plan import ExecutionPlan, PlanAdjustment, Step
 from app.context.prompt_assembler import PromptAssembler
 from app.context.task_context import TaskContext
 from app.tools.result_checker import CheckResult
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -33,6 +38,18 @@ class StepResult:
     error: str = ""
     retries_exhausted: bool = False
     script_path: str | None = None
+
+    @property
+    def success(self) -> bool:
+        return not self.failed
+
+    @property
+    def stderr(self) -> str:
+        return self.error
+
+    @property
+    def output_files(self) -> list[str]:
+        return self.files
 
 
 @dataclass
@@ -100,6 +117,12 @@ class Orchestrator:
             context.update_artifacts(workspace.read_artifact_manifest())
             plan.mark_done(step.id, check=check.status)
             workspace.save_json("plan.json", plan.to_dict())
+
+            # Adaptive: 根据结果动态调整后续计划
+            if self._should_adapt(step, result, plan.remaining_steps()):
+                adjustment = await self._adapt(context, step, result)
+                plan.apply_adjustment(adjustment, current_step_id=step.id)
+                workspace.save_json("plan.json", plan.to_dict())
 
         workspace.write_state(status="completed", current_step=None)
         return TaskResult(report="", files=workspace.list_output_files())
@@ -205,6 +228,74 @@ class Orchestrator:
             context.plan.mark_failed(failed_step.id, error)  # type: ignore[union-attr]
             return context.plan  # type: ignore[return-value]
         return await self.tools.planner.replan(context, failed_step, error)
+
+    def _should_adapt(self, step: Step, result: StepResult, remaining_steps: list[Step]) -> bool:
+        """判断是否需要 Adapt 调整后续计划。"""
+        if not remaining_steps:
+            return False
+        if result.failed:
+            return True
+        if step.is_exploratory:
+            return True
+        if self._has_unexpected_findings(result.stdout):
+            return True
+        return False
+
+    def _has_unexpected_findings(self, stdout: str) -> bool:
+        """检测 stdout 中是否包含需要调整计划的信号。"""
+        keywords = ("异常", "意外", "发现", "warning", "注意", "错误率", "缺失率超过")
+        return any(kw in (stdout or "") for kw in keywords)
+
+    async def _adapt(self, context: TaskContext, step: Step, result: StepResult) -> PlanAdjustment:
+        """轻量 LLM 调用，根据执行结果调整后续计划。"""
+        prompt = self.assembler.assemble_adapt(context, step, result.stdout)
+        response = await self.llm.call(prompt, max_tokens=500)
+        return self._parse_adjustment(response)
+
+    def _parse_adjustment(self, response: str) -> PlanAdjustment:
+        """从 LLM 响应中解析 PlanAdjustment，容错处理。"""
+        # 尝试从 markdown code block 中提取 JSON
+        text = response.strip()
+        if "```" in text:
+            parts = text.split("```")
+            for part in parts:
+                candidate = part.strip()
+                if candidate.startswith("json"):
+                    candidate = candidate[4:].strip()
+                try:
+                    data = json.loads(candidate)
+                    if isinstance(data, dict):
+                        return self._dict_to_adjustment(data)
+                except (json.JSONDecodeError, ValueError):
+                    continue
+
+        # 直接尝试解析整个响应
+        try:
+            data = json.loads(text)
+            if isinstance(data, dict):
+                return self._dict_to_adjustment(data)
+        except (json.JSONDecodeError, ValueError):
+            pass
+
+        logger.warning("无法解析 Adapt 响应，跳过调整: %s", text[:200])
+        return PlanAdjustment(reasoning="LLM 响应解析失败，保持原计划")
+
+    def _dict_to_adjustment(self, data: dict) -> PlanAdjustment:
+        insert_steps = []
+        for item in data.get("insert_steps", []):
+            if isinstance(item, dict) and item.get("id"):
+                insert_steps.append(Step(
+                    id=item["id"],
+                    tool=item.get("tool", "python"),
+                    description=item.get("description", ""),
+                    instruction=item.get("instruction", ""),
+                ))
+        return PlanAdjustment(
+            next_step_adjusted=data.get("next_step_adjusted"),
+            insert_steps=insert_steps,
+            skip_steps=data.get("skip_steps", []),
+            reasoning=data.get("reasoning", ""),
+        )
 
     def _extract_code_block(self, text: str) -> str:
         if "```" not in text:

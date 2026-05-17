@@ -1,3 +1,5 @@
+import openpyxl
+
 from app.tools.excel_preprocessor import ExcelPreprocessor
 
 
@@ -103,3 +105,41 @@ def test_classify_rows_blank_and_title():
     assert flags[4]["exclude"] is True
     assert flags[5]["kind"] == "data"
     assert flags[5]["exclude"] is False
+
+
+def test_formula_without_cached_value_warns(tmp_path):
+    raw_dir = tmp_path / "raw"
+    raw_dir.mkdir()
+    workbook_path = raw_dir / "formula.xlsx"
+    workbook = openpyxl.Workbook()
+    ws = workbook.active
+    ws.title = "Sheet1"
+    ws.append(["A", "B", "Total"])
+    ws.append([1, 2, "=A2+B2"])
+    workbook.save(workbook_path)
+
+    manifest = {
+        "manifest_path": "workbook_manifest.json",
+        "files": [
+            {
+                "path": str(workbook_path),
+                "sheets": [
+                    {
+                        "name": "Sheet1",
+                        "tables": [
+                            {
+                                "table_id": "Sheet1_t1",
+                                "range": "A1:C2",
+                                "header_candidates": [1],
+                            }
+                        ],
+                    }
+                ],
+            }
+        ],
+    }
+
+    result = ExcelPreprocessor().process(workbook_path, manifest)
+
+    assert result.tables[0].row_count == 1
+    assert any("公式没有缓存计算值" in warning for warning in result.tables[0].warnings)

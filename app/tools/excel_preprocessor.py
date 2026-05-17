@@ -58,6 +58,7 @@ class ExcelPreprocessor:
                     table = self._normalize_table(
                         file_path=file_path,
                         worksheet=worksheet,
+                        ws_values=ws_values,
                         table_candidate=table_candidate,
                         normalized_dir=normalized_dir,
                     )
@@ -73,13 +74,21 @@ class ExcelPreprocessor:
         self,
         file_path: Path,
         worksheet: Any,
+        ws_values: Any,
         table_candidate: dict[str, Any],
         normalized_dir: Path,
     ) -> NormalizedTable:
         min_col, min_row, max_col, max_row = range_boundaries(table_candidate["range"])
+        warnings = []
         rows = [
             [
-                worksheet.cell(row=row_idx, column=col_idx).value
+                self._cell_value(
+                    worksheet=worksheet,
+                    ws_values=ws_values,
+                    row=row_idx,
+                    col=col_idx,
+                    warnings=warnings,
+                )
                 for col_idx in range(min_col, max_col + 1)
             ]
             for row_idx in range(min_row, max_row + 1)
@@ -98,7 +107,6 @@ class ExcelPreprocessor:
         headers = self._dedupe_headers(rows[header_rel - 1])
 
         records = []
-        warnings = []
         for rel_idx, values in enumerate(rows, start=1):
             if rel_idx <= header_rel:
                 continue
@@ -137,6 +145,25 @@ class ExcelPreprocessor:
             row_count=len(dataframe),
             warnings=warnings,
         )
+
+    def _cell_value(
+        self,
+        worksheet: Any,
+        ws_values: Any,
+        row: int,
+        col: int,
+        warnings: list[str],
+    ) -> Any:
+        raw_value = worksheet.cell(row=row, column=col).value
+        computed_value = ws_values.cell(row=row, column=col).value
+        if isinstance(raw_value, str) and raw_value.startswith("="):
+            if computed_value is not None:
+                return computed_value
+            warnings.append(
+                f"{worksheet.title}!{worksheet.cell(row=row, column=col).coordinate}: "
+                "公式没有缓存计算值，保留公式文本"
+            )
+        return computed_value if computed_value is not None else raw_value
 
     def classify_rows(
         self,

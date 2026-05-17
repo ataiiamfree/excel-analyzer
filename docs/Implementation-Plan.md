@@ -224,9 +224,9 @@ def _should_adapt(self, step: Step, step_result: StepResult,
 Phase 1: 基础骨架 + 本地任务状态      ← 能跑起来、可复现（2天）      ✅ 已完成
 Phase 2: WorkbookIngestor            ← 能理解多 sheet / 多表（3天）  ✅ 已完成
 Phase 3: Excel 预处理与标准化输出      ← 脏 Excel 能稳健变 normalized tables（3天）  ✅ 已完成
-Phase 4: 核心 Pipeline + 执行器        ← 单步分析能用、执行可控（3天）  ✅ 已完成
-Phase 5: TaskContext + Artifact       ← 多步分析能用、产物可追溯（2天）  ✅ 已完成
-Phase 6: Adaptive + ResultChecker     ← 能动态调整、能发现跑通但不对（3天）  🔧 部分完成（ResultChecker 已实现，Adaptive 待实现）
+Phase 4: 核心 Pipeline + 执行器        ← 单步分析能用、执行可控（3天）  🔧 模块已实现，端到端验证中
+Phase 5: TaskContext + Artifact       ← 多步分析能用、产物可追溯（2天）  🔧 模块已实现，端到端验证中
+Phase 6: Adaptive + ResultChecker     ← 能动态调整、能发现跑通但不对（3天）  🔧 进行中（ResultChecker 已实现，Adaptive 待实现）
 Phase 7: Reporter                     ← 能生成报告（2天）
 Phase 8: Chainlit + Session + 记忆     ← 能聊天交互、追问、记住偏好（2天）
 Phase 9: 加固与测试                   ← 稳定性压测与脏 Excel 回归（3天）

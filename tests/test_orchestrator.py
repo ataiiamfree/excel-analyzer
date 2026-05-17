@@ -1,10 +1,12 @@
 import asyncio
+import json
 from types import SimpleNamespace
 
 from app.agent.orchestrator import Orchestrator, StepResult
-from app.agent.plan import ExecutionPlan, Step
+from app.agent.plan import ExecutionPlan, PlanAdjustment, Step
 from app.context.task_context import TaskContext
 from app.tools.result_checker import CheckResult, CheckItem
+from app.tools.result_checker import ResultChecker
 
 
 class FakeChecker:
@@ -106,7 +108,7 @@ def test_orchestrator_success_path():
     plan = ExecutionPlan(steps)
     context = TaskContext("t1", "q", {}, {}, plan=plan)
     workspace = FakeWorkspace()
-    tools = SimpleNamespace(checker=FakeChecker())
+    tools = SimpleNamespace(checker=ResultChecker())
     orchestrator = SuccessOrchestrator(llm_client=None, tools=tools, config=_make_config())
 
     result = asyncio.run(orchestrator.run_plan(plan, context, workspace))
@@ -129,3 +131,118 @@ def test_orchestrator_unknown_tool():
 
     assert plan.get_step("s1").status == "failed"
     assert "未注册的 skill 类型" in plan.get_step("s1").error
+
+
+# ── Adaptive 测试 ──
+
+
+def test_should_adapt_returns_false_for_last_step():
+    orch = Orchestrator(llm_client=None, tools=None, config=_make_config())
+    step = Step(id="s1", tool="python", description="x", instruction="x")
+    result = StepResult(stdout="ok", files=[])
+    assert orch._should_adapt(step, result, remaining_steps=[]) is False
+
+
+def test_should_adapt_returns_true_for_exploratory():
+    orch = Orchestrator(llm_client=None, tools=None, config=_make_config())
+    step = Step(id="s1", tool="python", description="EDA", instruction="x", is_exploratory=True)
+    result = StepResult(stdout="ok", files=[])
+    remaining = [Step(id="s2", tool="python", description="y", instruction="y")]
+    assert orch._should_adapt(step, result, remaining) is True
+
+
+def test_should_adapt_returns_true_for_unexpected_findings():
+    orch = Orchestrator(llm_client=None, tools=None, config=_make_config())
+    step = Step(id="s1", tool="python", description="x", instruction="x")
+    result = StepResult(stdout="发现异常值: 3个超过阈值", files=[])
+    remaining = [Step(id="s2", tool="python", description="y", instruction="y")]
+    assert orch._should_adapt(step, result, remaining) is True
+
+
+def test_should_adapt_returns_false_for_normal_result():
+    orch = Orchestrator(llm_client=None, tools=None, config=_make_config())
+    step = Step(id="s1", tool="python", description="x", instruction="x")
+    result = StepResult(stdout="处理完成，共 100 行", files=[])
+    remaining = [Step(id="s2", tool="python", description="y", instruction="y")]
+    assert orch._should_adapt(step, result, remaining) is False
+
+
+def test_parse_adjustment_from_json():
+    orch = Orchestrator(llm_client=None, tools=None, config=_make_config())
+    response = json.dumps({
+        "next_step_adjusted": "用 98 天作为阈值",
+        "insert_steps": [
+            {"id": "s1b", "tool": "python", "description": "深入分析", "instruction": "分析异常项"}
+        ],
+        "skip_steps": ["s3"],
+        "reasoning": "发现合理阈值为 98 天",
+    })
+    adj = orch._parse_adjustment(response)
+    assert adj.next_step_adjusted == "用 98 天作为阈值"
+    assert len(adj.insert_steps) == 1
+    assert adj.insert_steps[0].id == "s1b"
+    assert adj.skip_steps == ["s3"]
+
+
+def test_parse_adjustment_from_code_block():
+    orch = Orchestrator(llm_client=None, tools=None, config=_make_config())
+    response = '```json\n{"next_step_adjusted": null, "insert_steps": [], "skip_steps": [], "reasoning": "无需调整"}\n```'
+    adj = orch._parse_adjustment(response)
+    assert adj.next_step_adjusted is None
+    assert adj.insert_steps == []
+    assert adj.reasoning == "无需调整"
+
+
+def test_parse_adjustment_invalid_json_returns_noop():
+    orch = Orchestrator(llm_client=None, tools=None, config=_make_config())
+    adj = orch._parse_adjustment("这不是 JSON")
+    assert adj.insert_steps == []
+    assert adj.skip_steps == []
+    assert "解析失败" in adj.reasoning
+
+
+class AdaptOrchestrator(Orchestrator):
+    """模拟：s1 返回含"发现"的结果触发 Adapt，Adapt 插入一个新步骤。"""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._step_count = 0
+
+    async def _execute_step(self, step, context, workspace):
+        self._step_count += 1
+        if step.id == "s1":
+            return StepResult(stdout="发现平均时长 42 天，标准差 28 天", files=[])
+        return StepResult(stdout="处理完成", files=[])
+
+    async def _adapt(self, context, step, result):
+        # 模拟 LLM 返回：插入一个新步骤
+        return PlanAdjustment(
+            insert_steps=[Step(
+                id="s1_deep",
+                tool="python",
+                description="深入分析异常",
+                instruction="用 98 天阈值筛选异常项",
+            )],
+            reasoning="发现阈值应为 98 天",
+        )
+
+
+def test_orchestrator_adapt_inserts_step():
+    steps = [
+        Step(id="s1", tool="python", description="统计", instruction="统计", is_exploratory=True),
+        Step(id="s2", tool="python", description="报告", instruction="报告"),
+    ]
+    plan = ExecutionPlan(steps)
+    context = TaskContext("t1", "分析采购时长", {}, {}, plan=plan)
+    workspace = FakeWorkspace()
+    tools = SimpleNamespace(checker=FakeChecker())
+    orch = AdaptOrchestrator(llm_client=None, tools=tools, config=_make_config())
+
+    result = asyncio.run(orch.run_plan(plan, context, workspace))
+
+    # s1 完成后应该插入了 s1_deep，然后执行 s1_deep 和 s2
+    assert plan.get_step("s1").status == "done"
+    assert plan.get_step("s1_deep") is not None
+    assert plan.get_step("s1_deep").status == "done"
+    assert plan.get_step("s2").status == "done"
+    assert orch._step_count == 3  # s1, s1_deep, s2

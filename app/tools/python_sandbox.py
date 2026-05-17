@@ -6,6 +6,7 @@ import ast
 import os
 import platform
 import subprocess
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -44,10 +45,12 @@ class PythonSandbox:
         timeout: int = 60,
         max_memory_mb: int = 1024,
         max_stdout_chars: int = 20000,
+        python_executable: str | None = None,
     ):
         self.timeout = timeout
         self.max_memory_mb = max_memory_mb
         self.max_stdout_chars = max_stdout_chars
+        self.python_executable = python_executable or sys.executable
 
     def execute(
         self,
@@ -72,7 +75,7 @@ class PythonSandbox:
         try:
             preexec = self._limit_resources if platform.system() != "Windows" else None
             result = subprocess.run(
-                ["python3", str(script_path)],
+                [self.python_executable, str(script_path)],
                 cwd=workdir,
                 capture_output=True,
                 text=True,

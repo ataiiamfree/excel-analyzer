@@ -1,6 +1,7 @@
 from pathlib import Path
 from types import SimpleNamespace
 
+from app.agent.orchestrator import StepResult
 from app.tools.result_checker import ResultChecker
 
 
@@ -39,6 +40,17 @@ def test_all_pass(tmp_path):
     )
     assert result.status == "passed"
     assert not result.failed
+
+
+def test_step_result_contract_passes(tmp_path):
+    checker = ResultChecker()
+    result = checker.validate(
+        _make_step(),
+        StepResult(stdout="分析完成: 总计 100 行", files=[]),
+        _make_context(),
+        _make_workspace(tmp_path),
+    )
+    assert result.status == "passed"
 
 
 def test_process_failure(tmp_path):
