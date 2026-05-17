@@ -221,18 +221,31 @@ def _should_adapt(self, step: Step, step_result: StepResult,
 ## 一、实施阶段总览
 
 ```
-Phase 1: 基础骨架 + 本地任务状态      ← 能跑起来、可复现（2天）
-Phase 2: WorkbookIngestor            ← 能理解多 sheet / 多表（3天）
-Phase 3: Excel 预处理与标准化输出      ← 脏 Excel 能稳健变 normalized tables（3天）
-Phase 4: 核心 Pipeline + 执行器        ← 单步分析能用、执行可控（3天）
-Phase 5: TaskContext + Artifact       ← 多步分析能用、产物可追溯（2天）
-Phase 6: Adaptive + ResultChecker     ← 能动态调整、能发现跑通但不对（3天）
+Phase 1: 基础骨架 + 本地任务状态      ← 能跑起来、可复现（2天）      ✅ 已完成
+Phase 2: WorkbookIngestor            ← 能理解多 sheet / 多表（3天）  ✅ 已完成
+Phase 3: Excel 预处理与标准化输出      ← 脏 Excel 能稳健变 normalized tables（3天）  ✅ 已完成
+Phase 4: 核心 Pipeline + 执行器        ← 单步分析能用、执行可控（3天）  ✅ 已完成
+Phase 5: TaskContext + Artifact       ← 多步分析能用、产物可追溯（2天）  ✅ 已完成
+Phase 6: Adaptive + ResultChecker     ← 能动态调整、能发现跑通但不对（3天）  🔧 部分完成（ResultChecker 已实现，Adaptive 待实现）
 Phase 7: Reporter                     ← 能生成报告（2天）
 Phase 8: Chainlit + Session + 记忆     ← 能聊天交互、追问、记住偏好（2天）
 Phase 9: 加固与测试                   ← 稳定性压测与脏 Excel 回归（3天）
 ```
 
 每个 Phase 结束时都有可验证的交付物。
+
+### 当前实现状态（Review 后修复记录）
+
+以下改动在 Code Review 后补充修复：
+
+- **ExcelPreprocessor**: 实现 `_unmerge_and_fill()`（合并单元格拆分填充）、`_merge_multi_level_headers()`（多层表头合并）、`_detect_data_end()`（脚注检测）
+- **PythonSandbox**: AST 级静态检查（拦截 `eval`/`exec`/`__import__` 等）、`_limit_resources()` 内存限制（macOS 降级处理）、禁止绝对路径 `open`
+- **ResultChecker**: 实现 `_check_output_files_readable()`、`_check_basic_invariants()`
+- **LLMClient**: 连接池复用、HTTP/JSON 错误处理、中文 token 估算优化
+- **PromptAssembler**: 中文 token 计数修正、`degradable` 段真正参与降级
+- **Workspace**: 不覆写已有 state（支持恢复）、`register_artifact()` 单产物注册、`cleanup()` 过期清理、`save_artifacts` 增加 `created_at`
+- **Config**: 改用 `field(default_factory=lambda)` 支持运行时 env 覆盖
+- **测试**: 从 9 个扩充到 43 个，覆盖所有新增功能和修复点
 
 ---
 
@@ -317,7 +330,7 @@ class Config:
     # 不要把 sk-... 写进代码或文档；本地用 .env / shell 环境变量注入
 
     # Token 预算方案: "standard"(32K窗口) | "generous"(128K+窗口) | "deepseek"(DeepSeek V4 Pro)
-    budget_preset: str = os.getenv("BUDGET_PRESET", "generous")
+    budget_preset: str = os.getenv("BUDGET_PRESET", "deepseek")
 
     # 工作空间
     workspace_dir: str = "./workspace"
