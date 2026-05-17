@@ -116,6 +116,16 @@ class Orchestrator:
 
             context.quality_checks.append(check)
             context.add_step_summary(step.id, result.stdout, step.description)
+
+            # 自动注册步骤产出的文件（图表/Excel/CSV 等）
+            for fpath in result.output_files:
+                workspace.register_artifact(
+                    path=fpath,
+                    kind=self._infer_artifact_kind(fpath),
+                    producer_step=step.id,
+                    description=step.description,
+                )
+
             context.update_workspace_files(workspace.list_files())
             context.update_artifacts(workspace.read_artifact_manifest())
             plan.mark_done(step.id, check=check.status)
@@ -317,6 +327,17 @@ class Orchestrator:
             skip_steps=data.get("skip_steps", []),
             reasoning=data.get("reasoning", ""),
         )
+
+    _KIND_MAP = {
+        ".png": "chart", ".jpg": "chart", ".jpeg": "chart", ".svg": "chart",
+        ".xlsx": "excel", ".xls": "excel",
+        ".csv": "data", ".parquet": "data",
+        ".pdf": "report", ".md": "report",
+    }
+
+    def _infer_artifact_kind(self, path: str) -> str:
+        suffix = Path(path).suffix.lower()
+        return self._KIND_MAP.get(suffix, "file")
 
     def _extract_code_block(self, text: str) -> str:
         if "```" not in text:

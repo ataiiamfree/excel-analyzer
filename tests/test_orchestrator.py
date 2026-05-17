@@ -365,3 +365,51 @@ def test_reporter_failure_falls_back_to_simple_response():
     assert result.report
     assert "# 分析结果" in result.report
     assert any(state["status"] == "completed" for state in workspace.states)
+
+
+# ── 产物自动注册测试 ──
+
+
+class OutputFilesOrchestrator(Orchestrator):
+    """步骤返回 output_files，用于测试自动注册。"""
+
+    async def _execute_step(self, step, context, workspace):
+        return StepResult(
+            stdout="生成图表完成",
+            files=["output/趋势图.png", "output/汇总.xlsx", "output/data.csv"],
+        )
+
+
+def test_output_files_auto_registered_as_artifacts():
+    """步骤产出文件应自动注册到 artifact_manifest。"""
+    steps = [
+        Step(id="s1", tool="python", description="生成图表", instruction="画图"),
+    ]
+    plan = ExecutionPlan(steps)
+    context = TaskContext("t1", "分析数据", {}, {}, plan=plan)
+    workspace = FakeWorkspace()
+    tools = SimpleNamespace(checker=FakeChecker())
+    orch = OutputFilesOrchestrator(llm_client=None, tools=tools, config=_make_config())
+
+    asyncio.run(orch.run_plan(plan, context, workspace))
+
+    # 3 个步骤产物 + 1 个 report 产物 = 4
+    assert len(workspace.artifacts) == 4
+    kinds = {a["kind"] for a in workspace.artifacts}
+    assert "chart" in kinds
+    assert "excel" in kinds
+    assert "data" in kinds
+    # 每个产物的 producer_step 应为步骤 id
+    step_artifacts = [a for a in workspace.artifacts if a.get("producer_step") == "s1"]
+    assert len(step_artifacts) == 3
+
+
+def test_infer_artifact_kind():
+    """文件后缀应正确映射到 artifact kind。"""
+    orch = Orchestrator(llm_client=None, tools=None, config=_make_config())
+    assert orch._infer_artifact_kind("output/chart.png") == "chart"
+    assert orch._infer_artifact_kind("output/chart.jpg") == "chart"
+    assert orch._infer_artifact_kind("output/result.xlsx") == "excel"
+    assert orch._infer_artifact_kind("output/export.csv") == "data"
+    assert orch._infer_artifact_kind("output/report.md") == "report"
+    assert orch._infer_artifact_kind("output/unknown.zip") == "file"
