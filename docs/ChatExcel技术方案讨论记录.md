@@ -1,5 +1,7 @@
 # ChatExcel 技术方案讨论记录
 
+> 文档状态：历史讨论归档。当前架构以 `Design.md` 和 `Implementation-Plan.md` 为准；本文只保留方案演进、取舍背景和从 ReAct 转向 Code-First / Adaptive Plan-Execute 的讨论过程。
+>
 > 讨论时间：2026-05-06 ~ 2026-05-07
 > 背景：针对当前 ReAct 架构的 Excel 数据分析 Agent 存在的 token 膨胀、工具调用不稳定等问题，探讨替代技术路线。
 

@@ -8,7 +8,20 @@
 
 详见 [Design.md](docs/Design.md) 和 [Implementation-Plan.md](docs/Implementation-Plan.md)。
 
-## 快速开始
+## 当前实现状态
+
+当前代码处在核心模块落地阶段，已开始实现：
+
+- DeepSeek 配置入口
+- Workspace / state / artifact manifest
+- ExecutionPlan 调度状态机
+- TaskContext 与 PromptAssembler
+- WorkbookIngestor / ExcelPreprocessor / Profiler
+- PythonSandbox / ResultChecker
+
+`app/main.py` 和交互式前端属于 Phase 8，尚未实现。因此现在先以模块测试和 smoke test 为主，暂时不要用 `make run` 作为验收标准。
+
+## 快速开始（开发）
 
 ### 1. 环境准备
 
@@ -26,19 +39,15 @@ cp .env.example .env
 # 编辑 .env，填入你的 DeepSeek API Key
 ```
 
-### 3. 运行
-
-```bash
-make run
-# 浏览器自动打开 http://localhost:8000
-# 上传 Excel → 输入分析需求 → 查看报告 → 可追问
-```
-
-### 4. 测试
+### 3. 验证
 
 ```bash
 make test
 ```
+
+当前本机需要先安装 requirements，尤其是 `pytest`、`httpx`、`pyarrow`，才能跑完整测试。
+
+Phase 8 完成后再启用 Web/Chainlit 入口。
 
 ## 项目结构
 
