@@ -413,3 +413,72 @@ def test_infer_artifact_kind():
     assert orch._infer_artifact_kind("output/export.csv") == "data"
     assert orch._infer_artifact_kind("output/report.md") == "report"
     assert orch._infer_artifact_kind("output/unknown.zip") == "file"
+
+
+# ── Plan 解析测试 ──
+
+
+def test_parse_plan_from_json():
+    orch = Orchestrator(llm_client=None, tools=None, config=_make_config())
+    response = json.dumps({
+        "steps": [
+            {"id": "s1", "tool": "python", "description": "加载数据", "instruction": "读取Excel"},
+            {"id": "s2", "tool": "python", "description": "统计", "instruction": "统计分析", "depends_on": ["s1"]},
+        ],
+        "report_outline": [
+            {"title": "数据总览", "related_steps": ["s1", "s2"], "word_count": 800},
+        ],
+    })
+    plan = orch._parse_plan(response)
+    assert len(plan.steps) == 2
+    assert plan.steps[0].id == "s1"
+    assert plan.steps[1].depends_on == ["s1"]
+    assert len(plan.report_outline) == 1
+
+
+def test_parse_plan_from_code_block():
+    orch = Orchestrator(llm_client=None, tools=None, config=_make_config())
+    response = '```json\n{"steps": [{"id": "s1", "tool": "python", "description": "x", "instruction": "y"}], "report_outline": []}\n```'
+    plan = orch._parse_plan(response)
+    assert len(plan.steps) == 1
+    assert plan.steps[0].id == "s1"
+
+
+def test_parse_plan_fallback_on_invalid_json():
+    orch = Orchestrator(llm_client=None, tools=None, config=_make_config())
+    plan = orch._parse_plan("这不是有效的 JSON 响应")
+    assert len(plan.steps) == 1
+    assert plan.steps[0].id == "s1"
+    assert plan.steps[0].is_exploratory is True
+
+
+def test_step_callbacks_called():
+    """on_step_start 和 on_step_end 回调应被调用。"""
+    started = []
+    ended = []
+
+    class CallbackOrchestrator(SuccessOrchestrator):
+        pass
+
+    steps = [
+        Step(id="s1", tool="python", description="统计", instruction="统计"),
+    ]
+    plan = ExecutionPlan(steps)
+    context = TaskContext("t1", "分析", {}, {}, plan=plan)
+    workspace = FakeWorkspace()
+    tools = SimpleNamespace(checker=FakeChecker())
+    orch = CallbackOrchestrator(llm_client=None, tools=tools, config=_make_config())
+
+    async def on_start(step):
+        started.append(step.id)
+
+    async def on_end(step, result):
+        ended.append(step.id)
+
+    orch._on_step_start = on_start
+    orch._on_step_end = on_end
+
+    asyncio.run(orch.run_plan(plan, context, workspace))
+
+    assert started == ["s1"]
+    assert ended == ["s1"]

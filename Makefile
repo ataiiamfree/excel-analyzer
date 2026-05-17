@@ -4,8 +4,7 @@ install:
 	pip install -r requirements.txt
 
 run:
-	@echo "app/main.py belongs to Phase 8 and is not implemented yet. Use 'make test' for current validation."
-	@exit 1
+	chainlit run app/main.py --host 0.0.0.0 --port 8000
 
 test:
 	python -m pytest tests/ -v
