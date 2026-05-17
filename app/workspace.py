@@ -19,7 +19,14 @@ class Workspace:
         for dirname in ("raw", "normalized", "output", "scripts", "logs"):
             (self.path / dirname).mkdir(parents=True, exist_ok=True)
         self._ensure_json("artifact_manifest.json", [])
-        self.write_state(status="pending", current_step=None)
+        # 仅在 state.json 不存在时初始化，避免覆写已有任务状态（支持恢复）
+        if not (self.path / "state.json").exists():
+            self.write_state(
+                status="pending",
+                current_step=None,
+                started_at=datetime.now(timezone.utc).isoformat(),
+                retry_count=0,
+            )
 
     @classmethod
     def create(cls, root: str | Path = "workspace") -> "Workspace":
@@ -80,8 +87,29 @@ class Workspace:
                     "inputs": [getattr(table, "source_file", "")],
                     "schema": getattr(table, "columns", []),
                     "row_count": getattr(table, "row_count", None),
+                    "created_at": datetime.now(timezone.utc).isoformat(),
                 }
             )
+        self.save_json("artifact_manifest.json", manifest)
+
+    def register_artifact(
+        self,
+        path: str,
+        kind: str,
+        producer_step: str,
+        description: str = "",
+        inputs: list[str] | None = None,
+    ) -> None:
+        """注册单个产物（图表、导出文件等）到 artifact manifest。"""
+        manifest = self.read_artifact_manifest()
+        manifest.append({
+            "path": path,
+            "kind": kind,
+            "description": description,
+            "producer_step": producer_step,
+            "inputs": inputs or [],
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        })
         self.save_json("artifact_manifest.json", manifest)
 
     def read_artifact_manifest(self) -> list[dict[str, Any]]:
@@ -116,6 +144,21 @@ class Workspace:
         target = self.path / name
         if not target.exists():
             self.save_json(name, default)
+
+    def cleanup(self, keep_recent: int = 5) -> list[str]:
+        """清理过期任务目录，保留最近 N 个任务。返回被删除的 task_id 列表。"""
+        if not self.root.exists():
+            return []
+        task_dirs = sorted(
+            [d for d in self.root.iterdir() if d.is_dir()],
+            key=lambda d: d.stat().st_mtime,
+            reverse=True,
+        )
+        removed = []
+        for task_dir in task_dirs[keep_recent:]:
+            shutil.rmtree(task_dir, ignore_errors=True)
+            removed.append(task_dir.name)
+        return removed
 
     def _jsonable(self, value: Any) -> Any:
         if is_dataclass(value):

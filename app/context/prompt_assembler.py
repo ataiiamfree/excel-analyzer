@@ -100,6 +100,7 @@ class PromptAssembler:
         max_tokens = context.budget["max_prompt_tokens"]
         prompt = self._join(sections)
         while self._count_tokens(prompt) > max_tokens:
+            # 阶段1: 压缩历史摘要
             changed = context.compress_oldest_summaries()
             if changed:
                 self._replace_section(
@@ -110,6 +111,7 @@ class PromptAssembler:
                 prompt = self._join(sections)
                 continue
 
+            # 阶段2: 裁剪文件列表
             changed = context.trim_workspace_files()
             if changed:
                 self._replace_or_remove_section(
@@ -120,8 +122,19 @@ class PromptAssembler:
                 prompt = self._join(sections)
                 continue
 
+            # 阶段3: 逐个移除 degradable 段（从后往前，保留 system/query/task）
+            removed = False
+            for i in range(len(sections) - 1, -1, -1):
+                if sections[i].degradable:
+                    sections.pop(i)
+                    prompt = self._join(sections)
+                    removed = True
+                    break
+            if removed:
+                continue
+
             raise PromptBudgetError(
-                "Prompt exceeds budget after compressing summaries and file lists. "
+                "Prompt exceeds budget after all degradation attempts. "
                 "Reduce profile/detail size before calling the LLM."
             )
         return prompt
@@ -147,8 +160,10 @@ class PromptAssembler:
         return "\n\n".join(section.content for section in sections if section.content.strip())
 
     def _count_tokens(self, text: str) -> int:
-        # Conservative enough for budget tests without requiring tiktoken at import time.
-        return max(1, len(text) // 3)
+        # 中文字符约 1-2 token，英文约 1 token / 4 chars
+        cjk = sum(1 for ch in text if '\u4e00' <= ch <= '\u9fff')
+        rest = len(text) - cjk
+        return max(1, cjk + rest // 4)
 
     def _format_json(self, value: Any) -> str:
         return json.dumps(value, ensure_ascii=False, indent=2, default=str)

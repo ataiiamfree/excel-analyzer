@@ -10,7 +10,7 @@ import os
 from dataclasses import dataclass
 
 
-@dataclass(frozen=True)
+@dataclass
 class Config:
     llm_base_url: str = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
     llm_model: str = os.getenv("DEEPSEEK_MODEL", "deepseek-v4-pro")

@@ -40,7 +40,9 @@ class ExcelPreprocessor:
 
     def process(self, file_path: str | Path, manifest: dict[str, Any]) -> PreprocessResult:
         file_path = Path(file_path)
-        workbook = openpyxl.load_workbook(file_path, data_only=True)
+        # data_only=False so we can manipulate merged cells; values read via .value
+        workbook = openpyxl.load_workbook(file_path, data_only=False)
+        workbook_values = openpyxl.load_workbook(file_path, data_only=True)
         workspace_dir = file_path.parent.parent if file_path.parent.name == "raw" else file_path.parent
         normalized_dir = workspace_dir / "normalized"
         normalized_dir.mkdir(parents=True, exist_ok=True)
@@ -49,6 +51,9 @@ class ExcelPreprocessor:
         for file_info in manifest.get("files", []):
             for sheet_info in file_info.get("sheets", []):
                 worksheet = workbook[sheet_info["name"]]
+                ws_values = workbook_values[sheet_info["name"]]
+                # Step 1: 拆分合并单元格并填充
+                self._unmerge_and_fill(worksheet, ws_values)
                 for table_candidate in sheet_info.get("tables", []):
                     table = self._normalize_table(
                         file_path=file_path,
@@ -81,7 +86,15 @@ class ExcelPreprocessor:
         ]
         header_abs = (table_candidate.get("header_candidates") or [min_row])[0]
         header_rel = max(1, header_abs - min_row + 1)
-        row_flags = self.classify_rows(rows, header_row=header_rel, data_end=len(rows))
+
+        # Step 5: 多层表头合并为单层
+        if header_rel > 1:
+            self._merge_multi_level_headers(rows, header_rel)
+
+        # 检测数据区域边界（从底部向上过滤脚注行）
+        data_end = self._detect_data_end(rows, header_rel)
+
+        row_flags = self.classify_rows(rows, header_row=header_rel, data_end=data_end)
         headers = self._dedupe_headers(rows[header_rel - 1])
 
         records = []
@@ -167,6 +180,62 @@ class ExcelPreprocessor:
 
             flags[row_idx] = {"kind": "data", "exclude": False, "confidence": 0.9}
         return flags
+
+    def _unmerge_and_fill(self, ws: Any, ws_values: Any) -> None:
+        """拆分合并单元格，用左上角的值填充所有被合并的格子。
+
+        ws: 以 data_only=False 打开的 worksheet（可操作 merged_cells）
+        ws_values: 以 data_only=True 打开的 worksheet（读取公式计算后的值）
+        """
+        for merged_range in list(ws.merged_cells.ranges):
+            min_r, min_c = merged_range.min_row, merged_range.min_col
+            # 优先取计算值，公式单元格取 data_only=True 的值
+            value = ws_values.cell(min_r, min_c).value
+            if value is None:
+                value = ws.cell(min_r, min_c).value
+            ws.unmerge_cells(str(merged_range))
+            for row in range(merged_range.min_row, merged_range.max_row + 1):
+                for col in range(merged_range.min_col, merged_range.max_col + 1):
+                    ws.cell(row, col).value = value
+
+    def _merge_multi_level_headers(self, rows: list[list[Any]], header_row: int) -> None:
+        """多层表头合并为单层：'采购金额' + '计划' → '采购金额_计划'。
+
+        直接修改 rows 中 header_row-1 位置的行（rows 是 0-indexed list，header_row 是 1-based）。
+        """
+        if header_row <= 1:
+            return
+        num_cols = len(rows[0]) if rows else 0
+        merged_headers = []
+        for col_idx in range(num_cols):
+            parts: list[str] = []
+            for row_idx in range(header_row):  # rows 0..header_row-1
+                val = rows[row_idx][col_idx] if col_idx < len(rows[row_idx]) else None
+                if val is not None and str(val).strip():
+                    parts.append(str(val).strip())
+            # 去重（合并单元格填充后上下层可能相同）
+            seen: list[str] = []
+            for p in parts:
+                if p not in seen:
+                    seen.append(p)
+            merged_headers.append("_".join(seen) if seen else f"列{col_idx + 1}")
+        rows[header_row - 1] = merged_headers
+
+    def _detect_data_end(self, rows: list[list[Any]], header_row: int) -> int:
+        """从底部向上扫描，过滤脚注行，返回最后一个有效数据行的 1-based 索引。"""
+        footer_keywords = ("备注", "编制", "审核", "注：", "注:", "说明")
+        total = len(rows)
+        for row_idx in range(total, header_row, -1):
+            values = rows[row_idx - 1]  # convert to 0-based
+            non_empty = [v for v in values if v not in (None, "")]
+            if not non_empty:
+                continue
+            row_text = " ".join(str(v) for v in non_empty)
+            if any(kw in row_text for kw in footer_keywords):
+                continue
+            if len(non_empty) / max(len(values), 1) > 0.3:
+                return row_idx
+        return total
 
     def normalize_manifest_path(self, manifest: dict[str, Any]) -> str | None:
         return manifest.get("manifest_path") or manifest.get("path")

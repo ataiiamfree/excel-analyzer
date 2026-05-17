@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import ast
 import os
+import platform
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -30,7 +32,12 @@ class PythonSandbox:
         "urllib.",
         "socket.",
         "httpx.",
+        "__import__",
+        "importlib",
+        "compile(",
     )
+    # 需要 AST 级检查的危险调用
+    _ast_banned_calls = {"eval", "exec", "globals", "locals", "getattr", "setattr", "delattr"}
 
     def __init__(
         self,
@@ -63,6 +70,7 @@ class PythonSandbox:
         script_path.write_text(code, encoding="utf-8")
 
         try:
+            preexec = self._limit_resources if platform.system() != "Windows" else None
             result = subprocess.run(
                 ["python3", str(script_path)],
                 cwd=workdir,
@@ -70,6 +78,7 @@ class PythonSandbox:
                 text=True,
                 timeout=timeout,
                 env=self._build_env(workdir),
+                preexec_fn=preexec,
             )
         except subprocess.TimeoutExpired:
             return ExecResult(
@@ -88,9 +97,24 @@ class PythonSandbox:
         )
 
     def _static_check(self, code: str) -> None:
+        # 1. 字符串片段快检
         hits = [fragment for fragment in self.banned_fragments if fragment in code]
         if hits:
             raise SandboxPolicyError(f"代码包含不允许的调用: {hits}")
+
+        # 2. 禁止绝对路径 open
+        if 'open("/' in code or "open('/" in code:
+            raise SandboxPolicyError("禁止以绝对路径打开文件")
+
+        # 3. AST 级检查：捕获 eval()/exec() 等无法通过字符串片段可靠检测的调用
+        try:
+            tree = ast.parse(code)
+        except SyntaxError:
+            return  # 语法错误会在执行时报错，不在此拦截
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+                if node.func.id in self._ast_banned_calls:
+                    raise SandboxPolicyError(f"禁止调用 {node.func.id}()")
 
     def _build_env(self, workdir: Path) -> dict[str, str]:
         env = {
@@ -106,6 +130,12 @@ class PythonSandbox:
             }
         )
         return env
+
+    def _limit_resources(self) -> None:
+        """preexec_fn: 在子进程启动前限制内存（Linux/macOS）。"""
+        import resource
+        mem_bytes = self.max_memory_mb * 1024 * 1024
+        resource.setrlimit(resource.RLIMIT_AS, (mem_bytes, mem_bytes))
 
     def _list_output_files(self, workdir: Path) -> list[str]:
         output_dir = workdir / "output"
