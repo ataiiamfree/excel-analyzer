@@ -327,3 +327,41 @@ def test_report_without_outline_uses_simple_response():
 
     assert "# 分析结果" in result.report
     assert "分析完成" in result.report  # step summary 被包含
+
+
+class BrokenLLMReporterOrchestrator(SuccessOrchestrator):
+    """Reporter 的 LLM 调用会抛异常，用于测试 fallback。"""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        class ExplodingLLM:
+            async def call(self, prompt, max_tokens=2000):
+                raise RuntimeError("LLM 连接超时")
+
+        from app.agent.reporter import Reporter
+        self.reporter = Reporter(llm_client=ExplodingLLM())
+
+
+def test_reporter_failure_falls_back_to_simple_response():
+    """Reporter LLM 调用失败时，应降级为 simple response 而非崩溃。"""
+    steps = [
+        Step(id="s1", tool="python", description="统计", instruction="统计"),
+    ]
+    plan = ExecutionPlan(
+        steps,
+        report_outline=[
+            {"title": "分析总览", "related_steps": ["s1"], "word_count": 500},
+        ],
+    )
+    context = TaskContext("t1", "分析数据", {}, {}, plan=plan)
+    workspace = FakeWorkspace()
+    tools = SimpleNamespace(checker=ResultChecker())
+    orch = BrokenLLMReporterOrchestrator(llm_client=None, tools=tools, config=_make_config())
+
+    result = asyncio.run(orch.run_plan(plan, context, workspace))
+
+    # 没有崩溃，降级为 simple response
+    assert result.report
+    assert "# 分析结果" in result.report
+    assert any(state["status"] == "completed" for state in workspace.states)

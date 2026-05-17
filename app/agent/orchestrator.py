@@ -128,7 +128,11 @@ class Orchestrator:
                 workspace.save_json("plan.json", plan.to_dict())
 
         # 生成报告（有 outline 时分章节 LLM 调用，无 outline 时简单汇总）
-        report = await self.reporter.generate(context, workspace)
+        try:
+            report = await self.reporter.generate(context, workspace)
+        except Exception:
+            logger.exception("Reporter 生成报告失败，降级为简单汇总")
+            report = self.reporter._assemble_simple_response(context, workspace)
 
         # 保存报告到 output/report.md 并注册产物
         report_path = Path(workspace.path) / "output" / "report.md"
