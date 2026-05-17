@@ -1,0 +1,208 @@
+"""Excel preprocessing helpers.
+
+This module intentionally starts conservative: suspicious rows are flagged, but
+business data is not excluded unless the evidence is stronger than a keyword.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+import openpyxl
+import pandas as pd
+from openpyxl.utils.cell import range_boundaries
+
+
+@dataclass
+class NormalizedTable:
+    table_id: str
+    source_file: str
+    source_sheet: str
+    source_range: str
+    parquet_path: str
+    preview_xlsx_path: str
+    columns: list[dict[str, Any]]
+    row_count: int
+    warnings: list[str] = field(default_factory=list)
+
+
+@dataclass
+class PreprocessResult:
+    workbook_manifest_path: str | None
+    tables: list[NormalizedTable]
+    report: dict[str, Any]
+
+
+class ExcelPreprocessor:
+    summary_keywords = ("合计", "小计", "总计", "汇总", "合 计")
+
+    def process(self, file_path: str | Path, manifest: dict[str, Any]) -> PreprocessResult:
+        file_path = Path(file_path)
+        workbook = openpyxl.load_workbook(file_path, data_only=True)
+        workspace_dir = file_path.parent.parent if file_path.parent.name == "raw" else file_path.parent
+        normalized_dir = workspace_dir / "normalized"
+        normalized_dir.mkdir(parents=True, exist_ok=True)
+
+        tables: list[NormalizedTable] = []
+        for file_info in manifest.get("files", []):
+            for sheet_info in file_info.get("sheets", []):
+                worksheet = workbook[sheet_info["name"]]
+                for table_candidate in sheet_info.get("tables", []):
+                    table = self._normalize_table(
+                        file_path=file_path,
+                        worksheet=worksheet,
+                        table_candidate=table_candidate,
+                        normalized_dir=normalized_dir,
+                    )
+                    tables.append(table)
+
+        return PreprocessResult(
+            workbook_manifest_path=self.normalize_manifest_path(manifest),
+            tables=tables,
+            report={"table_count": len(tables), "warnings": [w for t in tables for w in t.warnings]},
+        )
+
+    def _normalize_table(
+        self,
+        file_path: Path,
+        worksheet: Any,
+        table_candidate: dict[str, Any],
+        normalized_dir: Path,
+    ) -> NormalizedTable:
+        min_col, min_row, max_col, max_row = range_boundaries(table_candidate["range"])
+        rows = [
+            [
+                worksheet.cell(row=row_idx, column=col_idx).value
+                for col_idx in range(min_col, max_col + 1)
+            ]
+            for row_idx in range(min_row, max_row + 1)
+        ]
+        header_abs = (table_candidate.get("header_candidates") or [min_row])[0]
+        header_rel = max(1, header_abs - min_row + 1)
+        row_flags = self.classify_rows(rows, header_row=header_rel, data_end=len(rows))
+        headers = self._dedupe_headers(rows[header_rel - 1])
+
+        records = []
+        warnings = []
+        for rel_idx, values in enumerate(rows, start=1):
+            if rel_idx <= header_rel:
+                continue
+            flag = row_flags.get(rel_idx, {})
+            if flag.get("warning"):
+                warnings.append(f"row {min_row + rel_idx - 1}: {flag['warning']}")
+            if flag.get("exclude"):
+                continue
+            record = {header: values[index] if index < len(values) else None for index, header in enumerate(headers)}
+            record["_source_file"] = file_path.name
+            record["_source_sheet"] = worksheet.title
+            record["_source_row"] = min_row + rel_idx - 1
+            records.append(record)
+
+        dataframe = pd.DataFrame.from_records(records, columns=[*headers, "_source_file", "_source_sheet", "_source_row"])
+        table_id = self._safe_table_id(str(table_candidate["table_id"]))
+        data_path = normalized_dir / f"{table_id}.parquet"
+        preview_path = normalized_dir / f"{table_id}_preview.xlsx"
+        try:
+            dataframe.to_parquet(data_path, index=False)
+        except Exception as exc:  # pragma: no cover - depends on optional parquet engine
+            warnings.append(f"parquet 写入失败，已降级为 xlsx: {exc}")
+            data_path = normalized_dir / f"{table_id}.xlsx"
+            dataframe.to_excel(data_path, index=False)
+        dataframe.head(50).to_excel(preview_path, index=False)
+
+        columns = [{"name": str(col), "dtype": str(dataframe[col].dtype)} for col in dataframe.columns]
+        return NormalizedTable(
+            table_id=table_id,
+            source_file=file_path.name,
+            source_sheet=worksheet.title,
+            source_range=table_candidate["range"],
+            parquet_path=str(data_path),
+            preview_xlsx_path=str(preview_path),
+            columns=columns,
+            row_count=len(dataframe),
+            warnings=warnings,
+        )
+
+    def classify_rows(
+        self,
+        rows: list[list[Any]],
+        header_row: int,
+        data_end: int | None = None,
+    ) -> dict[int, dict[str, Any]]:
+        """Classify rows using 1-based row indexes.
+
+        A summary keyword alone is not enough to exclude a row. It only becomes
+        an auto-excluded summary row when it looks like an aggregate label near
+        the table boundary and has numeric aggregate cells.
+        """
+
+        flags: dict[int, dict[str, Any]] = {}
+        data_end = data_end or len(rows)
+        for row_idx, values in enumerate(rows, start=1):
+            non_empty = [value for value in values if value not in (None, "")]
+            if row_idx < header_row:
+                flags[row_idx] = {"kind": "title", "exclude": True, "confidence": 0.9}
+                continue
+            if row_idx > data_end:
+                flags[row_idx] = {"kind": "footnote", "exclude": True, "confidence": 0.8}
+                continue
+            if not non_empty:
+                flags[row_idx] = {"kind": "blank", "exclude": True, "confidence": 1.0}
+                continue
+
+            if self._looks_like_summary_row(values, row_idx=row_idx, data_end=data_end):
+                flags[row_idx] = {"kind": "summary", "exclude": True, "confidence": 0.85}
+                continue
+
+            if self._contains_summary_keyword(values):
+                flags[row_idx] = {
+                    "kind": "possible_summary",
+                    "exclude": False,
+                    "confidence": 0.45,
+                    "warning": "包含汇总关键词，但不满足自动排除条件",
+                }
+                continue
+
+            flags[row_idx] = {"kind": "data", "exclude": False, "confidence": 0.9}
+        return flags
+
+    def normalize_manifest_path(self, manifest: dict[str, Any]) -> str | None:
+        return manifest.get("manifest_path") or manifest.get("path")
+
+    def _dedupe_headers(self, values: list[Any]) -> list[str]:
+        counts: dict[str, int] = {}
+        headers = []
+        for index, value in enumerate(values, start=1):
+            base = str(value).strip() if value not in (None, "") else f"列{index}"
+            count = counts.get(base, 0)
+            counts[base] = count + 1
+            headers.append(base if count == 0 else f"{base}_{count + 1}")
+        return headers
+
+    def _safe_table_id(self, table_id: str) -> str:
+        return "".join(char if char.isalnum() or char in ("-", "_") else "_" for char in table_id)
+
+    def _contains_summary_keyword(self, values: list[Any]) -> bool:
+        row_text = " ".join(str(value) for value in values if value not in (None, ""))
+        return any(keyword in row_text for keyword in self.summary_keywords)
+
+    def _looks_like_summary_row(
+        self,
+        values: list[Any],
+        row_idx: int,
+        data_end: int,
+    ) -> bool:
+        if not self._contains_summary_keyword(values):
+            return False
+        # Conservative default: only the final row is auto-excluded as a
+        # summary. Intermediate group subtotals need stronger structural
+        # detection later; until then they remain data with a warning.
+        if row_idx != data_end:
+            return False
+        numeric_count = sum(isinstance(value, (int, float)) for value in values)
+        text_values = [str(value).strip() for value in values if isinstance(value, str)]
+        first_text = text_values[0] if text_values else ""
+        label_like = any(keyword in first_text for keyword in self.summary_keywords)
+        return label_like and numeric_count >= 1
