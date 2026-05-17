@@ -1,5 +1,7 @@
 import asyncio
 import json
+import tempfile
+from pathlib import Path
 from types import SimpleNamespace
 
 from app.agent.orchestrator import Orchestrator, StepResult
@@ -22,10 +24,11 @@ class FakeChecker:
 
 
 class FakeWorkspace:
-    path = "."
-
     def __init__(self):
+        self._tmpdir = tempfile.mkdtemp()
+        self.path = self._tmpdir
         self.states = []
+        self.artifacts = []
 
     def is_cancel_requested(self):
         return False
@@ -44,6 +47,12 @@ class FakeWorkspace:
 
     def list_output_files(self):
         return []
+
+    def register_artifact(self, **kwargs):
+        self.artifacts.append(kwargs)
+
+    def read_text(self, path):
+        return ""
 
 
 class CancelWorkspace(FakeWorkspace):
@@ -246,3 +255,75 @@ def test_orchestrator_adapt_inserts_step():
     assert plan.get_step("s1_deep").status == "done"
     assert plan.get_step("s2").status == "done"
     assert orch._step_count == 3  # s1, s1_deep, s2
+
+
+# ── Reporter 集成测试 ──
+
+
+def test_success_path_report_is_nonempty():
+    """成功路径下 TaskResult.report 应为非空 Markdown。"""
+    steps = [
+        Step(id="s1", tool="python", description="统计", instruction="统计"),
+    ]
+    plan = ExecutionPlan(steps)
+    context = TaskContext("t1", "分析数据", {}, {}, plan=plan)
+    workspace = FakeWorkspace()
+    tools = SimpleNamespace(checker=ResultChecker())
+    orch = SuccessOrchestrator(llm_client=None, tools=tools, config=_make_config())
+
+    result = asyncio.run(orch.run_plan(plan, context, workspace))
+
+    assert result.report  # 非空
+    assert "分析" in result.report
+
+
+def test_success_path_saves_report_file():
+    """成功路径下应将报告保存到 output/report.md。"""
+    steps = [
+        Step(id="s1", tool="python", description="load", instruction="load"),
+    ]
+    plan = ExecutionPlan(steps)
+    context = TaskContext("t1", "分析数据", {}, {}, plan=plan)
+    workspace = FakeWorkspace()
+    tools = SimpleNamespace(checker=ResultChecker())
+    orch = SuccessOrchestrator(llm_client=None, tools=tools, config=_make_config())
+
+    asyncio.run(orch.run_plan(plan, context, workspace))
+
+    report_path = Path(workspace.path) / "output" / "report.md"
+    assert report_path.exists()
+    content = report_path.read_text(encoding="utf-8")
+    assert len(content) > 0
+
+
+def test_success_path_registers_report_artifact():
+    """成功路径下应将 report 注册到 artifact_manifest。"""
+    steps = [
+        Step(id="s1", tool="python", description="load", instruction="load"),
+    ]
+    plan = ExecutionPlan(steps)
+    context = TaskContext("t1", "分析数据", {}, {}, plan=plan)
+    workspace = FakeWorkspace()
+    tools = SimpleNamespace(checker=ResultChecker())
+    orch = SuccessOrchestrator(llm_client=None, tools=tools, config=_make_config())
+
+    asyncio.run(orch.run_plan(plan, context, workspace))
+
+    assert any(a.get("kind") == "report" for a in workspace.artifacts)
+
+
+def test_report_without_outline_uses_simple_response():
+    """没有 report_outline 时，Reporter 使用 simple response（无 LLM 调用）。"""
+    steps = [
+        Step(id="s1", tool="python", description="统计", instruction="统计"),
+    ]
+    plan = ExecutionPlan(steps)  # 无 report_outline
+    context = TaskContext("t1", "分析数据", {}, {}, plan=plan)
+    workspace = FakeWorkspace()
+    tools = SimpleNamespace(checker=ResultChecker())
+    orch = SuccessOrchestrator(llm_client=None, tools=tools, config=_make_config())
+
+    result = asyncio.run(orch.run_plan(plan, context, workspace))
+
+    assert "# 分析结果" in result.report
+    assert "分析完成" in result.report  # step summary 被包含

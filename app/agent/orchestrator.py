@@ -12,8 +12,10 @@ from typing import Any, Awaitable, Callable
 
 import json
 import logging
+from pathlib import Path
 
 from app.agent.plan import ExecutionPlan, PlanAdjustment, Step
+from app.agent.reporter import Reporter
 from app.context.prompt_assembler import PromptAssembler
 from app.context.task_context import TaskContext
 from app.tools.result_checker import CheckResult
@@ -67,6 +69,7 @@ class Orchestrator:
         self.tools = tools
         self.config = config
         self.assembler = PromptAssembler()
+        self.reporter = Reporter(llm_client=llm_client)
         self.executors: dict[str, Executor] = {
             "python": self._execute_python,
             "knowledge": self._execute_knowledge,
@@ -124,8 +127,22 @@ class Orchestrator:
                 plan.apply_adjustment(adjustment, current_step_id=step.id)
                 workspace.save_json("plan.json", plan.to_dict())
 
+        # 生成报告（有 outline 时分章节 LLM 调用，无 outline 时简单汇总）
+        report = await self.reporter.generate(context, workspace)
+
+        # 保存报告到 output/report.md 并注册产物
+        report_path = Path(workspace.path) / "output" / "report.md"
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        report_path.write_text(report, encoding="utf-8")
+        workspace.register_artifact(
+            path="output/report.md",
+            kind="report",
+            producer_step="reporter",
+            description="分析报告",
+        )
+
         workspace.write_state(status="completed", current_step=None)
-        return TaskResult(report="", files=workspace.list_output_files())
+        return TaskResult(report=report, files=workspace.list_output_files())
 
     async def _execute_step(self, step: Step, context: TaskContext, workspace: Any) -> StepResult:
         executor = self.executors.get(step.tool)
