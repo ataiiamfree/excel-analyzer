@@ -132,10 +132,14 @@ class PythonSandbox:
         return env
 
     def _limit_resources(self) -> None:
-        """preexec_fn: 在子进程启动前限制内存（Linux/macOS）。"""
-        import resource
-        mem_bytes = self.max_memory_mb * 1024 * 1024
-        resource.setrlimit(resource.RLIMIT_AS, (mem_bytes, mem_bytes))
+        """preexec_fn: 在子进程启动前限制内存。"""
+        try:
+            import resource
+            mem_bytes = self.max_memory_mb * 1024 * 1024
+            resource.setrlimit(resource.RLIMIT_AS, (mem_bytes, mem_bytes))
+        except (ValueError, OSError):
+            # macOS 可能不支持 RLIMIT_AS，降级跳过
+            pass
 
     def _list_output_files(self, workdir: Path) -> list[str]:
         output_dir = workdir / "output"

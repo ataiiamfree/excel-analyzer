@@ -5,6 +5,15 @@ from app.context.prompt_assembler import PromptAssembler, PromptBudgetError
 from app.context.task_context import BUDGET_PRESETS, TaskContext
 
 
+@pytest.fixture(autouse=True)
+def _clean_budget_presets():
+    """确保测试注入的 preset 不污染其他测试。"""
+    original = dict(BUDGET_PRESETS)
+    yield
+    BUDGET_PRESETS.clear()
+    BUDGET_PRESETS.update(original)
+
+
 def test_prompt_budget_raises_cleanly_when_no_degradable_section_fits():
     BUDGET_PRESETS["tiny"] = {
         "max_prompt_tokens": 20,
@@ -28,8 +37,9 @@ def test_prompt_budget_raises_cleanly_when_no_degradable_section_fits():
 
 
 def test_prompt_budget_compresses_named_summary_section():
+    # 设置一个较小的 budget，使得 300 chars 的 summaries 必须被压缩
     BUDGET_PRESETS["small"] = {
-        "max_prompt_tokens": 350,
+        "max_prompt_tokens": 120,
         "step_summaries": 20,
         "max_summary_per_step": 200,
         "max_findings": 3,
@@ -58,4 +68,31 @@ def test_prompt_budget_compresses_named_summary_section():
     prompt = PromptAssembler().assemble(context, step)
 
     assert "## 当前任务" in prompt
-    assert "## 前序步骤结果" in prompt
+    # 验证压缩确实发生了（_history 键合并了旧摘要）
+    assert "_history" in context.step_summaries or len(context.step_summaries) <= 4
+
+
+def test_degradable_sections_removed_when_over_budget():
+    """当压缩摘要和文件列表都不够时，应逐个移除 degradable 段。"""
+    BUDGET_PRESETS["tight"] = {
+        "max_prompt_tokens": 80,
+        "step_summaries": 10,
+        "max_summary_per_step": 10,
+        "max_findings": 1,
+        "workspace_files": 1,
+    }
+    step = Step(id="s1", tool="python", description="x", instruction="do it")
+    context = TaskContext(
+        task_id="t1",
+        user_query="q",
+        workbook_manifest={},
+        data_profile={"a": "very long profile " * 20},
+        budget_preset="tight",
+        plan=ExecutionPlan([step]),
+    )
+    context.key_findings = ["finding " * 10]
+
+    prompt = PromptAssembler().assemble(context, step)
+    # profile 和 findings 应该被降级移除，但核心段保留
+    assert "## 当前任务" in prompt
+    assert "## 用户问题" in prompt

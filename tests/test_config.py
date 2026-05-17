@@ -1,9 +1,37 @@
+import os
+from unittest.mock import patch
+
 from app.config import Config
 
 
 def test_deepseek_defaults_are_aligned():
-    config = Config()
+    # 清除环境变量，确保测试的是真正的默认值
+    env_keys = [
+        "DEEPSEEK_BASE_URL", "DEEPSEEK_MODEL", "DEEPSEEK_API_KEY",
+        "BUDGET_PRESET", "WORKSPACE_DIR", "SANDBOX_TIMEOUT",
+        "SANDBOX_MEMORY_MB", "MAX_STDOUT_CHARS", "MAX_REPAIR_ATTEMPTS",
+        "MAX_FILE_SIZE_MB", "MAX_CONCURRENT_TASKS",
+    ]
+    clean_env = {k: v for k, v in os.environ.items() if k not in env_keys}
+    with patch.dict(os.environ, clean_env, clear=True):
+        config = Config()
 
     assert config.llm_base_url == "https://api.deepseek.com"
     assert config.llm_model == "deepseek-v4-pro"
     assert config.budget_preset == "deepseek"
+
+
+def test_env_override():
+    overrides = {
+        "DEEPSEEK_BASE_URL": "https://custom.api",
+        "DEEPSEEK_MODEL": "custom-model",
+        "BUDGET_PRESET": "generous",
+        "SANDBOX_TIMEOUT": "120",
+    }
+    with patch.dict(os.environ, overrides):
+        config = Config()
+
+    assert config.llm_base_url == "https://custom.api"
+    assert config.llm_model == "custom-model"
+    assert config.budget_preset == "generous"
+    assert config.sandbox_timeout == 120
