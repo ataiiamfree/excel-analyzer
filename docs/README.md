@@ -14,6 +14,15 @@
 - 默认 model：`deepseek-v4-pro`
 - API key：只通过 `DEEPSEEK_API_KEY` 环境变量注入，禁止写进文档、代码、prompt 日志或任务产物。
 
+## 实现进度
+
+- Phase 1–4: 数据预处理管线（Ingestor → Preprocessor → Profiler）✅
+- Phase 5: 执行引擎（Sandbox + ResultChecker + Orchestrator）✅
+- Phase 6: Adaptive Plan-Execute 动态调整 ✅
+- Phase 7: Reporter 报告生成 ✅
+- Phase 8: Chainlit 交互层 + Session + Memory ✅
+- Phase 9: 加固与测试（待开始）
+
 ## 当前架构口径
 
 - 不做企业级鉴权、多租户、审计、分布式队列。
@@ -21,4 +30,6 @@
 - 通过 `WorkbookIngestor` 识别 workbook/sheet/table 结构。
 - 通过 `ExcelPreprocessor` 输出 normalized tables。
 - 通过 `TaskContext + Artifact Manifest` 管理步骤间信息。
-- 通过 `ResultChecker` 校验“代码跑通但结果不对”的风险。
+- 通过 `ResultChecker` 校验”代码跑通但结果不对”的风险。
+- 通过 `Session` 管理追问复用，`Memory` 存储跨会话 schema 指纹。
+- 通过 Chainlit 提供 Web 聊天界面。

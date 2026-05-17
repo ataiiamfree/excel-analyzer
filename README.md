@@ -10,18 +10,15 @@
 
 ## 当前实现状态
 
-当前代码处在核心模块落地阶段，已开始实现：
+Phase 1–8 已完成，核心功能可用：
 
-- DeepSeek 配置入口
-- Workspace / state / artifact manifest
-- ExecutionPlan 调度状态机
-- TaskContext 与 PromptAssembler
-- WorkbookIngestor / ExcelPreprocessor / Profiler
-- PythonSandbox / ResultChecker
+- **数据预处理**: WorkbookIngestor → ExcelPreprocessor → Profiler
+- **执行引擎**: PythonSandbox + ResultChecker + Adaptive Plan-Execute
+- **报告生成**: Reporter 分章节 LLM 调用，自动注册产物
+- **交互层**: Chainlit Web 界面，支持文件上传、分析、追问
+- **会话管理**: Session 追问复用、Memory 跨会话 schema 匹配
 
-`app/main.py` 和交互式前端属于 Phase 8，尚未实现。因此现在先以模块测试和 smoke test 为主，暂时不要用 `make run` 作为验收标准。
-
-## 快速开始（开发）
+## 快速开始
 
 ### 1. 环境准备
 
@@ -39,15 +36,20 @@ cp .env.example .env
 # 编辑 .env，填入你的 DeepSeek API Key
 ```
 
-### 3. 验证
+### 3. 运行
+
+```bash
+make run
+# 浏览器打开 http://localhost:8000
+# 上传 Excel → 输入分析需求 → 查看分步进度 → 查看报告和图表
+# 追问 "再按部门细分" → 不重新上传，直接出新结果
+```
+
+### 4. 测试
 
 ```bash
 make test
 ```
-
-当前本机需要先安装 requirements，尤其是 `pytest`、`httpx`、`pyarrow`，才能跑完整测试。
-
-Phase 8 完成后再启用 Web/Chainlit 入口。
 
 ## 项目结构
 
@@ -69,6 +71,7 @@ docs/               # 设计文档
 ## 技术栈
 
 - **LLM**: DeepSeek V4 Pro（128K+ 上下文）
-- **后端**: FastAPI + Python 3.10+
+- **交互层**: Chainlit
+- **后端**: Python 3.10+
 - **数据处理**: pandas + openpyxl + pyarrow
 - **图表**: matplotlib
