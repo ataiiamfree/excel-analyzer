@@ -25,6 +25,8 @@ class NormalizedTable:
     preview_xlsx_path: str
     columns: list[dict[str, Any]]
     row_count: int
+    enum_columns: dict[str, list[str]] = field(default_factory=dict)
+    oversized_cells: list[dict[str, Any]] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
 
 
@@ -37,14 +39,26 @@ class PreprocessResult:
 
 class ExcelPreprocessor:
     summary_keywords = ("合计", "小计", "总计", "汇总", "合 计")
+    enum_max_unique_values = 15
+    enum_max_unique_ratio = 0.5
+    oversized_cell_chars = 200
 
-    def process(self, file_path: str | Path, manifest: dict[str, Any]) -> PreprocessResult:
+    def process(
+        self,
+        file_path: str | Path,
+        manifest: dict[str, Any],
+        output_dir: str | Path | None = None,
+    ) -> PreprocessResult:
         file_path = Path(file_path)
         # data_only=False so we can manipulate merged cells; values read via .value
         workbook = openpyxl.load_workbook(file_path, data_only=False)
         workbook_values = openpyxl.load_workbook(file_path, data_only=True)
-        workspace_dir = file_path.parent.parent if file_path.parent.name == "raw" else file_path.parent
-        normalized_dir = workspace_dir / "normalized"
+        workspace_dir = (
+            file_path.parent.parent
+            if file_path.parent.name == "raw"
+            else file_path.parent
+        )
+        normalized_dir = Path(output_dir) if output_dir is not None else workspace_dir / "normalized"
         normalized_dir.mkdir(parents=True, exist_ok=True)
 
         tables: list[NormalizedTable] = []
@@ -67,7 +81,10 @@ class ExcelPreprocessor:
         return PreprocessResult(
             workbook_manifest_path=self.normalize_manifest_path(manifest),
             tables=tables,
-            report={"table_count": len(tables), "warnings": [w for t in tables for w in t.warnings]},
+            report={
+                "table_count": len(tables),
+                "warnings": [w for table in tables for w in table.warnings],
+            },
         )
 
     def _normalize_table(
@@ -78,8 +95,13 @@ class ExcelPreprocessor:
         table_candidate: dict[str, Any],
         normalized_dir: Path,
     ) -> NormalizedTable:
-        min_col, min_row, max_col, max_row = range_boundaries(table_candidate["range"])
-        warnings = []
+        range_ref = str(table_candidate["range"])
+        bounds = range_boundaries(range_ref)
+        min_col = self._range_bound(bounds[0], range_ref)
+        min_row = self._range_bound(bounds[1], range_ref)
+        max_col = self._range_bound(bounds[2], range_ref)
+        max_row = self._range_bound(bounds[3], range_ref)
+        warnings: list[str] = []
         rows = [
             [
                 self._cell_value(
@@ -93,12 +115,15 @@ class ExcelPreprocessor:
             ]
             for row_idx in range(min_row, max_row + 1)
         ]
-        header_abs = (table_candidate.get("header_candidates") or [min_row])[0]
-        header_rel = max(1, header_abs - min_row + 1)
+        header_candidates = table_candidate.get("header_candidates") or [min_row]
+        header_start_abs, header_end_abs = self._detect_header_range(header_candidates, default=min_row)
+        header_rel = max(1, header_end_abs - min_row + 1)
+        header_depth = header_end_abs - header_start_abs + 1
 
         # Step 5: 多层表头合并为单层
-        if header_rel > 1:
-            self._merge_multi_level_headers(rows, header_rel)
+        if header_depth > 1:
+            header_start_rel = max(1, header_start_abs - min_row + 1)
+            self._merge_multi_level_headers(rows, header_rel, start_rel=header_start_rel)
 
         # 检测数据区域边界（从底部向上过滤脚注行）
         data_end = self._detect_data_end(rows, header_rel)
@@ -106,7 +131,7 @@ class ExcelPreprocessor:
         row_flags = self.classify_rows(rows, header_row=header_rel, data_end=data_end)
         headers = self._dedupe_headers(rows[header_rel - 1])
 
-        records = []
+        records: list[dict[str, Any]] = []
         for rel_idx, values in enumerate(rows, start=1):
             if rel_idx <= header_rel:
                 continue
@@ -115,13 +140,19 @@ class ExcelPreprocessor:
                 warnings.append(f"row {min_row + rel_idx - 1}: {flag['warning']}")
             if flag.get("exclude"):
                 continue
-            record = {header: values[index] if index < len(values) else None for index, header in enumerate(headers)}
+            record = {
+                header: values[index] if index < len(values) else None
+                for index, header in enumerate(headers)
+            }
             record["_source_file"] = file_path.name
             record["_source_sheet"] = worksheet.title
             record["_source_row"] = min_row + rel_idx - 1
             records.append(record)
 
-        dataframe = pd.DataFrame.from_records(records, columns=[*headers, "_source_file", "_source_sheet", "_source_row"])
+        dataframe = pd.DataFrame.from_records(
+            records,
+            columns=[*headers, "_source_file", "_source_sheet", "_source_row"],
+        )
         table_id = self._safe_table_id(str(table_candidate["table_id"]))
         data_path = normalized_dir / f"{table_id}.parquet"
         preview_path = normalized_dir / f"{table_id}_preview.xlsx"
@@ -133,18 +164,69 @@ class ExcelPreprocessor:
             dataframe.to_excel(data_path, index=False)
         dataframe.head(50).to_excel(preview_path, index=False)
 
-        columns = [{"name": str(col), "dtype": str(dataframe[col].dtype)} for col in dataframe.columns]
+        enum_columns = self._detect_enum_columns(dataframe, headers)
+        oversized_cells = self._detect_oversized_cells(dataframe, headers)
+        if oversized_cells:
+            warnings.append(f"检测到 {len(oversized_cells)} 个超长文本单元格，profile 预览会截断")
+
+        columns = [
+            self._column_metadata(dataframe, str(col), enum_columns)
+            for col in dataframe.columns
+        ]
         return NormalizedTable(
             table_id=table_id,
             source_file=file_path.name,
             source_sheet=worksheet.title,
-            source_range=table_candidate["range"],
+            source_range=range_ref,
             parquet_path=str(data_path),
             preview_xlsx_path=str(preview_path),
             columns=columns,
             row_count=len(dataframe),
+            enum_columns=enum_columns,
+            oversized_cells=oversized_cells,
             warnings=warnings,
         )
+
+    def _column_metadata(
+        self,
+        dataframe: pd.DataFrame,
+        column: str,
+        enum_columns: dict[str, list[str]],
+    ) -> dict[str, Any]:
+        metadata: dict[str, Any] = {"name": column, "dtype": str(dataframe[column].dtype)}
+        if column in enum_columns:
+            metadata["enum_values"] = enum_columns[column]
+        return metadata
+
+    def _range_bound(self, value: Any, range_ref: str) -> int:
+        if value is None:
+            raise ValueError(f"Invalid table range: {range_ref}")
+        return int(value)
+
+    def _detect_header_range(self, candidates: list[int], default: int) -> tuple[int, int]:
+        """Find the start and end rows of a consecutive header block.
+
+        Returns (header_start, header_end) as absolute row numbers.
+        [1, 2] → (1, 2): two-level header.
+        [3] → (3, 3): single header at row 3.
+        [1, 2, 5] → (1, 2): first consecutive block only.
+        """
+        if not candidates:
+            return (default, default)
+        first = self._row_index(candidates[0], default)
+        last = first
+        for c in candidates[1:]:
+            val = self._row_index(c, -1)
+            if val == last + 1:
+                last = val
+            else:
+                break
+        return (first, last)
+
+    def _row_index(self, value: Any, default: int) -> int:
+        if value is None:
+            return default
+        return int(value)
 
     def _cell_value(
         self,
@@ -225,10 +307,13 @@ class ExcelPreprocessor:
                 for col in range(merged_range.min_col, merged_range.max_col + 1):
                     ws.cell(row, col).value = value
 
-    def _merge_multi_level_headers(self, rows: list[list[Any]], header_row: int) -> None:
+    def _merge_multi_level_headers(
+        self, rows: list[list[Any]], header_row: int, start_rel: int = 1
+    ) -> None:
         """多层表头合并为单层：'采购金额' + '计划' → '采购金额_计划'。
 
         直接修改 rows 中 header_row-1 位置的行（rows 是 0-indexed list，header_row 是 1-based）。
+        start_rel: 表头起始行（1-based），默认为 1。只合并 start_rel..header_row 范围内的行。
         """
         if header_row <= 1:
             return
@@ -236,7 +321,7 @@ class ExcelPreprocessor:
         merged_headers = []
         for col_idx in range(num_cols):
             parts: list[str] = []
-            for row_idx in range(header_row):  # rows 0..header_row-1
+            for row_idx in range(start_rel - 1, header_row):  # start_rel-1..header_row-1
                 val = rows[row_idx][col_idx] if col_idx < len(rows[row_idx]) else None
                 if val is not None and str(val).strip():
                     parts.append(str(val).strip())
@@ -266,6 +351,58 @@ class ExcelPreprocessor:
 
     def normalize_manifest_path(self, manifest: dict[str, Any]) -> str | None:
         return manifest.get("manifest_path") or manifest.get("path")
+
+    def _detect_enum_columns(
+        self,
+        dataframe: pd.DataFrame,
+        headers: list[str],
+    ) -> dict[str, list[str]]:
+        enum_columns: dict[str, list[str]] = {}
+        for header in headers:
+            if header not in dataframe.columns:
+                continue
+            series = dataframe[header]
+            if (
+                pd.api.types.is_numeric_dtype(series)
+                or pd.api.types.is_datetime64_any_dtype(series)
+            ):
+                continue
+            values = series.dropna().astype(str).str.strip()
+            values = values[values != ""]
+            if values.empty:
+                continue
+            unique_values = sorted(values.unique().tolist())
+            unique_ratio = len(unique_values) / len(values)
+            if (
+                len(unique_values) <= self.enum_max_unique_values
+                and unique_ratio < self.enum_max_unique_ratio
+            ):
+                enum_columns[header] = unique_values
+        return enum_columns
+
+    def _detect_oversized_cells(
+        self,
+        dataframe: pd.DataFrame,
+        headers: list[str],
+    ) -> list[dict[str, Any]]:
+        oversized: list[dict[str, Any]] = []
+        if "_source_row" not in dataframe.columns:
+            return oversized
+        for header in headers:
+            if header not in dataframe.columns:
+                continue
+            for row_index, value in dataframe[header].items():
+                if not isinstance(value, str) or len(value) <= self.oversized_cell_chars:
+                    continue
+                oversized.append(
+                    {
+                        "column": header,
+                        "source_row": int(dataframe.at[row_index, "_source_row"]),
+                        "length": len(value),
+                        "preview": value[: self.oversized_cell_chars],
+                    }
+                )
+        return oversized
 
     def _dedupe_headers(self, values: list[Any]) -> list[str]:
         counts: dict[str, int] = {}

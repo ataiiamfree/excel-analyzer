@@ -182,10 +182,16 @@ class WorkbookIngestor:
     def _header_candidates(
         self, worksheet: Any, bounds: tuple[int, int, int, int]
     ) -> list[int]:
+        """Find header row candidates — consecutive text-heavy rows at the top.
+
+        Stops scanning after the first non-candidate row following a candidate,
+        so data rows with text content don't get mistakenly included.
+        """
         min_row, min_col, max_row, max_col = bounds
-        candidates = []
+        candidates: list[int] = []
         scan_end = min(max_row, min_row + 19)
         width = max_col - min_col + 1
+        found_first = False
         for row_idx in range(min_row, scan_end + 1):
             values = [
                 worksheet.cell(row_idx, col_idx).value
@@ -193,8 +199,20 @@ class WorkbookIngestor:
             ]
             non_empty = [value for value in values if value not in (None, "")]
             if not non_empty:
+                if found_first:
+                    break
                 continue
             text_count = sum(isinstance(value, str) for value in non_empty)
-            if len(non_empty) / width >= 0.4 and text_count / len(non_empty) >= 0.6:
+            numeric_count = sum(isinstance(v, (int, float)) for v in non_empty)
+            is_header_like = (
+                len(non_empty) / width >= 0.4
+                and text_count / len(non_empty) >= 0.6
+                and numeric_count == 0  # Headers don't contain numbers
+            )
+            if is_header_like:
                 candidates.append(row_idx)
+                found_first = True
+            elif found_first:
+                # First non-header row after header block → stop
+                break
         return candidates[:3] or [min_row]
