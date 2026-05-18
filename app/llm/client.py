@@ -14,29 +14,44 @@ class LLMError(RuntimeError):
 
 
 class LLMClient:
-    def __init__(self, base_url: str, model: str, api_key: str = ""):
+    def __init__(
+        self,
+        base_url: str,
+        model: str,
+        api_key: str = "",
+        thinking: bool = True,
+        effort: str = "max",
+    ):
         self.base_url = base_url.rstrip("/")
         self.model = model
         self.api_key = api_key
+        self.thinking = thinking
+        self.effort = effort
         self._client: httpx.AsyncClient | None = None
 
     async def _get_client(self) -> httpx.AsyncClient:
         if self._client is None or self._client.is_closed:
-            self._client = httpx.AsyncClient(timeout=120)
+            self._client = httpx.AsyncClient(timeout=300)
         return self._client
 
     async def call(
         self,
         prompt: str,
-        max_tokens: int = 2000,
+        max_tokens: int = 8000,
         temperature: float = 0.1,
     ) -> str:
-        payload = {
+        payload: dict = {
             "model": self.model,
             "messages": [{"role": "user", "content": prompt}],
             "max_tokens": max_tokens,
             "temperature": temperature,
         }
+        # DeepSeek 思考模式
+        if self.thinking:
+            payload["thinking"] = {"type": "enabled"}
+        # DeepSeek 最大推理力度
+        if self.effort:
+            payload["output_config"] = {"effort": self.effort}
         headers = {}
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
