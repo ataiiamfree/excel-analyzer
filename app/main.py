@@ -64,13 +64,30 @@ def _mime_for_path(path: str) -> str:
     return guessed or "application/octet-stream"
 
 
+def _extract_excel_from_message(message: cl.Message) -> cl.File | None:
+    """If the message has an Excel attachment, return it."""
+    for elem in (message.elements or []):
+        if isinstance(elem, cl.File):
+            suffix = Path(elem.name or "").suffix.lower()
+            if suffix in EXCEL_EXTENSIONS:
+                return elem
+    return None
+
+
+async def _setup_session(file_path: str, file_name: str):
+    """Create a new session and orchestrator for the given file."""
+    session = Session.create(file_path=file_path)
+    cl.user_session.set("session", session)
+    cl.user_session.set("orchestrator", build_orchestrator())
+    cl.user_session.set("current_file", file_name)
+    logger.info("新建 session: file=%s", file_name)
+
+
 @cl.on_chat_start
 async def start():
     """Ask the user to upload an Excel file and create a session."""
     files = await cl.AskFileMessage(
         content="请上传 Excel 文件（.xlsx/.xlsm），然后输入你的分析需求。",
-        # Browser/office apps often report xlsx as application/octet-stream or
-        # application/zip. Accept broadly here, then validate by extension below.
         accept=["*/*"],
         max_size_mb=100,
     ).send()
@@ -85,22 +102,32 @@ async def start():
         await cl.Message(content="目前请上传 .xlsx 或 .xlsm 文件。").send()
         return
 
-    session = Session.create(file_path=uploaded.path)
-    cl.user_session.set("session", session)
-    cl.user_session.set("orchestrator", build_orchestrator())
-
-    await cl.Message(content=f"已上传 **{uploaded.name}**，请输入你的分析需求。").send()
+    await _setup_session(uploaded.path, uploaded.name)
+    await cl.Message(content=f"已上传 **{uploaded.name}**，请输入你的分析需求。\n\n💡 分析完成后可以继续追问，也可以直接发送新的 Excel 文件切换数据。").send()
 
 
 @cl.on_message
 async def main(message: cl.Message):
-    """Handle user analysis queries and follow-ups."""
+    """Handle user analysis queries, follow-ups, and new file uploads."""
+
+    # ── 检测是否发送了新 Excel 文件 ──────────────────────
+    new_file = _extract_excel_from_message(message)
+    if new_file and new_file.path:
+        await _setup_session(new_file.path, new_file.name or "unknown.xlsx")
+        current_file = cl.user_session.get("current_file")
+        query = (message.content or "").strip()
+        if not query:
+            await cl.Message(content=f"已切换到 **{current_file}**，请输入你的分析需求。").send()
+            return
+        # 有文件也有问题文本，继续往下走分析流程
+
     session: Session | None = cl.user_session.get("session")
     if session is None:
-        await cl.Message(content="请先上传 Excel 文件。").send()
+        await cl.Message(content="请先上传 Excel 文件。你可以直接在对话框发送 .xlsx 文件。").send()
         return
 
     orchestrator = cl.user_session.get("orchestrator")
+    current_file = cl.user_session.get("current_file") or "Excel"
 
     # Progress callbacks — show each step as a collapsible Chainlit Step
     async def on_step_start(step: Step):
@@ -116,6 +143,7 @@ async def main(message: cl.Message):
             cl.user_session.set("current_cl_step", None)
 
     # Run the analysis
+    await cl.Message(content=f"正在分析 **{current_file}**，请稍候...").send()
     try:
         task_result = await orchestrator.run(
             query=message.content,
@@ -129,7 +157,9 @@ async def main(message: cl.Message):
         return
 
     # Send report
-    await cl.Message(content=_report_for_ui(task_result.report)).send()
+    report_text = _report_for_ui(task_result.report)
+    if report_text:
+        await cl.Message(content=report_text).send()
 
     # Send charts and downloadable files
     elements: list[cl.Element] = []
