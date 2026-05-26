@@ -42,7 +42,7 @@ class PromptAssembler:
         parts = [
             "代码执行或结果校验失败，请修正。只输出完整 Python 脚本，不要解释。",
             f"## 当前步骤\n{step.description}\n{step.instruction}",
-            f"## 数据概况\n{self._format_json(context.data_profile)}",
+            f"## 数据概况\n{self.format_profile_for_prompt(context.data_profile)}",
             f"## 可用产物\n{self._format_json(context.artifact_manifest)}",
             f"## 失败代码\n```python\n{failed_code}\n```",
             f"## stderr\n{(stderr or '')[-2000:]}",
@@ -95,7 +95,10 @@ class PromptAssembler:
         sections = [
             PromptSection("system", self._load_system_prompt(current_step.tool)),
             PromptSection("user_query", f"## 用户问题\n{context.user_query}"),
-            PromptSection("profile", f"## 数据概况\n{self._format_json(context.data_profile)}", True),
+            PromptSection(
+                "profile",
+                f"## 数据概况\n{self.format_profile_for_prompt(context.data_profile)}",
+            ),
             PromptSection(
                 "plan",
                 f"## 执行计划\n{self._format_plan_overview(context.plan, current_step.id)}",
@@ -208,6 +211,70 @@ class PromptAssembler:
     def _format_json(self, value: Any) -> str:
         return json.dumps(value, ensure_ascii=False, indent=2, default=str)
 
+    def format_profile_for_prompt(self, profile: dict[str, Any]) -> str:
+        """Return a compact, path-preserving profile for planner/code prompts."""
+        tables = profile.get("tables", []) if isinstance(profile, dict) else []
+        if not tables:
+            return "无数据表画像。"
+
+        lines = [
+            "数据表目录：只能读取每个 table 的 path 指向的正式 normalized 数据文件；"
+            "不要用 glob 扫描 normalized 目录，不要读取 *_preview.xlsx。"
+        ]
+        for index, table in enumerate(tables, start=1):
+            table_id = table.get("table_id", f"table_{index}")
+            source = table.get("source", "")
+            path = table.get("path", "")
+            shape = table.get("shape", {})
+            rows = shape.get("rows", "?") if isinstance(shape, dict) else "?"
+            cols = shape.get("cols", "?") if isinstance(shape, dict) else "?"
+            lines.append(
+                f"{index}. table_id={table_id}; source={source}; "
+                f"path={path}; shape={rows}行x{cols}列"
+            )
+
+            columns = self._compact_columns(table)
+            if columns:
+                lines.append(f"   columns: {', '.join(columns)}")
+
+            enum_columns = table.get("enum_columns") or {}
+            enum_text = self._compact_enum_columns(enum_columns)
+            if enum_text:
+                lines.append(f"   enum_columns: {enum_text}")
+
+            warnings = table.get("warnings") or []
+            if warnings:
+                lines.append(f"   warnings: {'; '.join(map(str, warnings[:3]))}")
+        return "\n".join(lines)
+
+    def _compact_columns(self, table: dict[str, Any]) -> list[str]:
+        columns: list[str] = []
+        for item in table.get("columns_detail") or []:
+            name = item.get("name")
+            if not name:
+                continue
+            dtype = item.get("dtype", "?")
+            columns.append(f"{name}({dtype})")
+
+        for group in table.get("columns_grouped") or []:
+            pattern = group.get("pattern")
+            if not pattern:
+                continue
+            dtype = group.get("dtype", "?")
+            count = group.get("count", "?")
+            columns.append(f"{pattern}({dtype}, {count}列)")
+        return columns
+
+    def _compact_enum_columns(self, enum_columns: dict[str, Any]) -> str:
+        parts = []
+        for name, values in list(enum_columns.items())[:8]:
+            if not isinstance(values, list):
+                continue
+            preview = ", ".join(map(str, values[:8]))
+            suffix = "..." if len(values) > 8 else ""
+            parts.append(f"{name}=[{preview}{suffix}]")
+        return "; ".join(parts)
+
     def _format_plan_overview(self, plan: Any, current_step_id: str) -> str:
         if plan is None:
             return "尚未生成计划"
@@ -221,6 +288,12 @@ class PromptAssembler:
         if tool == "python":
             return (
                 "你是 Python 数据分析专家。读取 normalized parquet/xlsx，"
+                "必须优先使用数据概况中 tables[].path 指向的正式数据文件，"
+                "不要扫描 normalized 目录，不要读取 *_preview.xlsx。"
+                "写代码前必须根据数据概况里的 columns 确认列名；"
+                "不同 sheet 的同一业务字段可能列名不同，必须做同义/包含匹配，"
+                "例如 送电时间 可匹配 接火送电/送电日期，"
+                "报装容量 可匹配 增减容量/新减增容量(kVA)。"
                 "把图表和明细写入 output/，用 print 输出摘要和口径。"
             )
         if tool == "knowledge":

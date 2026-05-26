@@ -429,9 +429,12 @@ python -m app.tools.workbook_ingestor --file messy_workbook.xlsx
 实现要点：
 - 双层遍历 manifest 结构 `files[].sheets[].tables[]`，针对每个 table candidate 读取区域。
 - 拆分合并单元格并用左上角值填充，但只在 working copy 中处理。
+- AutoFilter 作为强表头信号写入 manifest，筛选区域首行优先进入 `header_candidates`。
 - 表头检测返回候选和置信度，不只返回一个行号。
 - 多层表头合并为单层（"采购金额" + "计划" → "采购金额_计划"）。
 - 标记标题行、空行、汇总行、脚注；不要静默删除原始数据。
+- 记录枚举列 `enum_columns`，便于后续 Planner/代码生成理解类别字段。
+- 记录超长文本 `oversized_cells`；normalized 数据本体不截断，只在 profile/sample 里截断给 LLM 看的预览。
 - 输出 `normalized/{table_id}.parquet` 和 `normalized/{table_id}_preview.xlsx`。
 - 每行保留 `_source_file`, `_source_sheet`, `_source_row`，方便追溯。
 - 返回 `PreprocessResult(tables, report, warnings)`。
@@ -458,6 +461,8 @@ class ExcelPreprocessor:
 4. 数据中间有分类合并单元格 + 中间汇总行。
 5. 有脚注 + 隐藏列。
 6. 表内有“合计”作为正常业务值，不能误删。
+7. 有 AutoFilter 的 sheet，筛选区域首行应优先作为表头候选。
+8. 有枚举列和超长文本列，枚举值应进入 profile，超长文本只截断预览不截断 normalized 数据。
 
 ### 验证点
 ```bash

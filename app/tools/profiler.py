@@ -12,6 +12,10 @@ from app.tools.excel_preprocessor import NormalizedTable
 
 
 class Profiler:
+    sample_cell_max_chars = 200
+    enum_max_unique_values = 15
+    enum_max_unique_ratio = 0.5
+
     def profile(self, tables: list[NormalizedTable]) -> dict[str, Any]:
         return {"tables": [self._profile_table(table) for table in tables]}
 
@@ -20,7 +24,7 @@ class Profiler:
         visible_columns = [col for col in df.columns if not str(col).startswith("_source_")]
         columns_info = [self._profile_column(df, col) for col in visible_columns]
         grouped, detail = self._group_similar_columns(columns_info)
-        sample = df[visible_columns].head(3).to_dict(orient="records")
+        sample = self._sample_rows(df, visible_columns)
         return {
             "table_id": table.table_id,
             "source": f"{table.source_sheet}!{table.source_range}",
@@ -28,6 +32,8 @@ class Profiler:
             "shape": {"rows": len(df), "cols": len(visible_columns)},
             "columns_grouped": grouped,
             "columns_detail": detail,
+            "enum_columns": table.enum_columns,
+            "oversized_cells": table.oversized_cells,
             "sample_rows": sample,
             "warnings": table.warnings,
         }
@@ -64,7 +70,47 @@ class Profiler:
             non_null = series.dropna().astype(str)
             info["nunique"] = int(non_null.nunique())
             info["sample"] = non_null.unique()[:3].tolist()
+            enum_values = self._enum_values(non_null)
+            if enum_values:
+                info["enum_values"] = enum_values
         return info
+
+    def _sample_rows(
+        self,
+        df: pd.DataFrame,
+        visible_columns: list[str],
+    ) -> list[dict[str, Any]]:
+        rows = []
+        for record in df[visible_columns].head(3).to_dict(orient="records"):
+            rows.append(
+                {
+                    key: self._truncate_sample_value(value)
+                    for key, value in record.items()
+                }
+            )
+        return rows
+
+    def _truncate_sample_value(self, value: Any) -> Any:
+        if not isinstance(value, str) or len(value) <= self.sample_cell_max_chars:
+            return value
+        return (
+            value[: self.sample_cell_max_chars]
+            + f"[TRUNCATED:原长度{len(value)},请勿基于此单元格完整内容做分析]"
+        )
+
+    def _enum_values(self, series: pd.Series) -> list[str]:
+        values = series.astype(str).str.strip()
+        values = values[values != ""]
+        if values.empty:
+            return []
+        unique_values = sorted(values.unique().tolist())
+        unique_ratio = len(unique_values) / len(values)
+        if (
+            len(unique_values) <= self.enum_max_unique_values
+            and unique_ratio < self.enum_max_unique_ratio
+        ):
+            return unique_values
+        return []
 
     def _group_similar_columns(
         self, columns: list[dict[str, Any]]

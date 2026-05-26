@@ -441,6 +441,7 @@ Ingestor 负责生成 `workbook_manifest.json`，不改任何单元格：
 
 核心策略：
 - 每个 sheet 先做结构扫描：非空矩阵、合并单元格、隐藏行列、公式单元格、明显空白分隔带。
+- AutoFilter 是强表头信号：如果 workbook 已设置筛选区域，manifest 把筛选区域首行放到 `header_candidates` 首位，并提高该 candidate 的置信度。
 - 多表合一时按空行/空列分隔、边框/填充样式、连续非空区域切成多个 table candidate。
 - header detection 输出候选和置信度，不只输出一个行号。
 - 不确定时交给 LLM 兜底，但只让 LLM 判断结构，不让它直接修改数据。
@@ -467,6 +468,8 @@ Ingestor 负责生成 `workbook_manifest.json`，不改任何单元格：
 - 不在 raw workbook 上原地修改。
 - 不静默删除疑似业务行。汇总行、脚注、异常行先标记，只有置信度高时才从 normalized table 中排除，并在 `preprocess_report` 里记录。
 - 每个 normalized table 都保留 `source_file/sheet/range/original_row` 这些血缘字段，后续导出明细时能追溯回原表。
+- 预处理不截断 normalized 数据本体；超长文本只在 profile/sample 中截断并记录 `oversized_cells`，避免 prompt 被大文本污染。
+- 枚举列在 profile 中显式记录 `enum_columns`，让 Planner/代码生成不用只靠 sample 猜类别字段。
 - 如果检测到多个 table，Profiler 和 Planner 必须知道有哪些 table，而不是默认只分析第一个 sheet。
 
 ```
@@ -485,10 +488,11 @@ Ingestor 负责生成 `workbook_manifest.json`，不改任何单元格：
 │                                          │
 │  ① 针对每个 table candidate 读取区域       │
 │  ② 合并单元格 → 在 working copy 中填充      │
-│  ③ 检测表头行（候选 + 置信度）              │
+│  ③ 检测表头行（AutoFilter + 候选 + 置信度） │
 │  ④ 标记标题行、空行、汇总行、脚注           │
 │  ⑤ 多层表头 → 合并为单层列名               │
-│  ⑥ 输出 normalized/{table_id}.parquet/xlsx │
+│  ⑥ 记录枚举列/超长文本元信息               │
+│  ⑦ 输出 normalized/{table_id}.parquet/xlsx │
 │                                          │
 │  置信度高 → 直接使用                       │
 │  置信度低 → 进入 Layer 2                   │

@@ -22,15 +22,17 @@ from app.agent.plan import Step
 from app.session import Session
 
 
+EXCEL_EXTENSIONS = {".xlsx", ".xlsm"}
+
+
 @cl.on_chat_start
 async def start():
     """Ask the user to upload an Excel file and create a session."""
     files = await cl.AskFileMessage(
-        content="请上传 Excel 文件（.xlsx），然后输入你的分析需求。",
-        accept=[
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            "application/vnd.ms-excel",
-        ],
+        content="请上传 Excel 文件（.xlsx/.xlsm），然后输入你的分析需求。",
+        # Browser/office apps often report xlsx as application/octet-stream or
+        # application/zip. Accept broadly here, then validate by extension below.
+        accept=["*/*"],
         max_size_mb=100,
     ).send()
 
@@ -39,6 +41,11 @@ async def start():
         return
 
     uploaded = files[0]
+    suffix = Path(uploaded.name).suffix.lower()
+    if suffix not in EXCEL_EXTENSIONS:
+        await cl.Message(content="目前请上传 .xlsx 或 .xlsm 文件。").send()
+        return
+
     session = Session.create(file_path=uploaded.path)
     cl.user_session.set("session", session)
     cl.user_session.set("orchestrator", build_orchestrator())

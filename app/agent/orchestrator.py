@@ -102,18 +102,21 @@ class Orchestrator:
             profile = session.profile
         else:
             # 首次分析：全流程
-            manifest = self.tools.ingestor.scan(session.file_path)
-            tables = self.tools.preprocessor.process(
-                file_path=session.file_path,
+            raw_file_path = Path(workspace.save_upload(session.file_path)).resolve()
+            normalized_dir = (Path(workspace.path) / "normalized").resolve()
+            manifest = self.tools.ingestor.scan(raw_file_path)
+            preprocess_result = self.tools.preprocessor.process(
+                file_path=raw_file_path,
                 manifest=manifest,
-                output_dir=str(Path(workspace.path) / "normalized"),
+                output_dir=normalized_dir,
             )
+            tables = preprocess_result.tables
             workspace.save_artifacts(tables)
             profile = self.tools.profiler.profile(tables)
             session.cache_preprocessing(
                 workbook_manifest=manifest,
                 profile=profile,
-                normalized_dir=str(Path(workspace.path) / "normalized"),
+                normalized_dir=str(normalized_dir),
             )
 
         # 构建 TaskContext
@@ -150,7 +153,7 @@ class Orchestrator:
 
     async def _plan(self, context: TaskContext, session: Session) -> ExecutionPlan:
         """Call LLM to generate an execution plan."""
-        profile_text = json.dumps(context.data_profile, ensure_ascii=False, default=str)[:4000]
+        profile_text = self.assembler.format_profile_for_prompt(context.data_profile)
 
         follow_up_section = ""
         if session.is_follow_up:
@@ -328,7 +331,7 @@ class Orchestrator:
         )
 
         workspace.write_state(status="completed", current_step=None)
-        return TaskResult(report=report, files=workspace.list_output_files())
+        return TaskResult(report=report, files=self._absolute_output_files(workspace))
 
     async def _execute_step(self, step: Step, context: TaskContext, workspace: Any) -> StepResult:
         executor = self.executors.get(step.tool)
@@ -510,6 +513,12 @@ class Orchestrator:
     def _infer_artifact_kind(self, path: str) -> str:
         suffix = Path(path).suffix.lower()
         return self._KIND_MAP.get(suffix, "file")
+
+    def _absolute_output_files(self, workspace: Any) -> list[str]:
+        return [
+            str((Path(workspace.path) / path).resolve())
+            for path in workspace.list_output_files()
+        ]
 
     def _extract_code_block(self, text: str) -> str:
         if "```" not in text:

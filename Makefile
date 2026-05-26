@@ -1,10 +1,13 @@
 .PHONY: install run test clean lint
 
+HOST ?= 127.0.0.1
+PORT ?= 8000
+
 install:
 	pip install -r requirements.txt
 
 run:
-	chainlit run app/main.py --host 0.0.0.0 --port 8000
+	chainlit run app/main.py --host $(HOST) --port $(PORT)
 
 test:
 	python -m pytest tests/ -v

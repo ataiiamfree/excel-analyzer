@@ -1,6 +1,10 @@
+from pathlib import Path
+
 import openpyxl
+import pandas as pd
 
 from app.tools.excel_preprocessor import ExcelPreprocessor
+from app.tools.profiler import Profiler
 
 
 def test_summary_keyword_inside_business_value_is_not_auto_excluded():
@@ -143,3 +147,91 @@ def test_formula_without_cached_value_warns(tmp_path):
 
     assert result.tables[0].row_count == 1
     assert any("公式没有缓存计算值" in warning for warning in result.tables[0].warnings)
+
+
+def test_process_writes_to_explicit_output_dir(tmp_path):
+    workbook_path = tmp_path / "input.xlsx"
+    output_dir = tmp_path / "custom_normalized"
+    workbook = openpyxl.Workbook()
+    ws = workbook.active
+    ws.title = "Sheet1"
+    ws.append(["名称", "金额"])
+    ws.append(["A", 10])
+    workbook.save(workbook_path)
+
+    manifest = {
+        "manifest_path": "workbook_manifest.json",
+        "files": [
+            {
+                "path": str(workbook_path),
+                "sheets": [
+                    {
+                        "name": "Sheet1",
+                        "tables": [
+                            {
+                                "table_id": "Sheet1_t1",
+                                "range": "A1:B2",
+                                "header_candidates": [1],
+                            }
+                        ],
+                    }
+                ],
+            }
+        ],
+    }
+
+    result = ExcelPreprocessor().process(workbook_path, manifest, output_dir=output_dir)
+
+    assert result.tables[0].row_count == 1
+    assert output_dir in Path(result.tables[0].parquet_path).parents
+
+
+def test_process_records_enum_and_oversized_metadata_without_truncating_data(tmp_path):
+    workbook_path = tmp_path / "input.xlsx"
+    long_text = "很长的说明" * 50
+    workbook = openpyxl.Workbook()
+    ws = workbook.active
+    ws.title = "Sheet1"
+    ws.append(["状态", "说明"])
+    ws.append(["已完成", long_text])
+    ws.append(["未开始", "短说明"])
+    ws.append(["已完成", "短说明2"])
+    ws.append(["已完成", "短说明3"])
+    ws.append(["已完成", "短说明4"])
+    workbook.save(workbook_path)
+
+    manifest = {
+        "manifest_path": "workbook_manifest.json",
+        "files": [
+            {
+                "path": str(workbook_path),
+                "sheets": [
+                    {
+                        "name": "Sheet1",
+                        "tables": [
+                            {
+                                "table_id": "Sheet1_t1",
+                                "range": "A1:B6",
+                                "header_candidates": [1],
+                            }
+                        ],
+                    }
+                ],
+            }
+        ],
+    }
+
+    result = ExcelPreprocessor().process(workbook_path, manifest)
+    table = result.tables[0]
+
+    assert table.enum_columns == {"状态": ["已完成", "未开始"]}
+    assert table.oversized_cells[0]["column"] == "说明"
+    assert table.oversized_cells[0]["source_row"] == 2
+
+    path = Path(table.parquet_path)
+    dataframe = pd.read_parquet(path) if path.suffix == ".parquet" else pd.read_excel(path)
+    assert dataframe.loc[0, "说明"] == long_text
+
+    profile = Profiler().profile(result.tables)
+    sample_value = profile["tables"][0]["sample_rows"][0]["说明"]
+    assert "[TRUNCATED:" in sample_value

@@ -4,9 +4,15 @@ import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 
+import openpyxl
+
 from app.agent.orchestrator import Orchestrator, StepResult
 from app.agent.plan import ExecutionPlan, PlanAdjustment, Step
 from app.context.task_context import TaskContext
+from app.session import Session
+from app.tools.excel_preprocessor import ExcelPreprocessor
+from app.tools.profiler import Profiler
+from app.tools.workbook_ingestor import WorkbookIngestor
 from app.tools.result_checker import CheckResult, CheckItem
 from app.tools.result_checker import ResultChecker
 
@@ -482,3 +488,43 @@ def test_step_callbacks_called():
 
     assert started == ["s1"]
     assert ended == ["s1"]
+
+
+def test_run_first_analysis_preprocesses_into_workspace(tmp_path):
+    """Full run smoke: first analysis should preprocess and cache profile."""
+    workbook_path = tmp_path / "input.xlsx"
+    workbook = openpyxl.Workbook()
+    ws = workbook.active
+    ws.title = "Sheet1"
+    ws.append(["名称", "金额"])
+    ws.append(["A", 10])
+    ws.append(["B", 20])
+    workbook.save(workbook_path)
+
+    class PlanningLLM:
+        async def call(self, prompt, max_tokens=2000, temperature=0.1):
+            return '{"steps": [], "report_outline": []}'
+
+    config = SimpleNamespace(
+        workspace_dir=str(tmp_path / "workspace"),
+        budget_preset="deepseek",
+        sandbox_timeout=10,
+        max_repair_attempts=1,
+    )
+    tools = SimpleNamespace(
+        ingestor=WorkbookIngestor(),
+        preprocessor=ExcelPreprocessor(),
+        profiler=Profiler(),
+        checker=ResultChecker(),
+    )
+    session = Session.create(file_path=str(workbook_path))
+    orch = Orchestrator(llm_client=PlanningLLM(), tools=tools, config=config)
+
+    result = asyncio.run(orch.run("分析金额", session))
+
+    assert result.report.startswith("# 分析结果")
+    assert session.profile is not None
+    assert session.normalized_dir is not None
+    assert Path(session.normalized_dir).is_absolute()
+    assert Path(session.normalized_dir).exists()
+    assert session.is_follow_up

@@ -39,7 +39,7 @@ def test_prompt_budget_raises_cleanly_when_no_degradable_section_fits():
 def test_prompt_budget_compresses_named_summary_section():
     # 设置一个较小的 budget，使得 300 chars 的 summaries 必须被压缩
     BUDGET_PRESETS["small"] = {
-        "max_prompt_tokens": 120,
+        "max_prompt_tokens": 220,
         "step_summaries": 20,
         "max_summary_per_step": 200,
         "max_findings": 3,
@@ -98,7 +98,7 @@ def test_assemble_adapt_includes_key_sections():
 def test_degradable_sections_removed_when_over_budget():
     """当压缩摘要和文件列表都不够时，应逐个移除 degradable 段。"""
     BUDGET_PRESETS["tight"] = {
-        "max_prompt_tokens": 80,
+        "max_prompt_tokens": 260,
         "step_summaries": 10,
         "max_summary_per_step": 10,
         "max_findings": 1,
@@ -109,13 +109,60 @@ def test_degradable_sections_removed_when_over_budget():
         task_id="t1",
         user_query="q",
         workbook_manifest={},
-        data_profile={"a": "very long profile " * 20},
+        data_profile={"tables": []},
         budget_preset="tight",
         plan=ExecutionPlan([step]),
     )
     context.key_findings = ["finding " * 10]
 
     prompt = PromptAssembler().assemble(context, step)
-    # profile 和 findings 应该被降级移除，但核心段保留
+    # findings 应该被降级移除，但核心 profile/任务段保留
     assert "## 当前任务" in prompt
     assert "## 用户问题" in prompt
+    assert "## 数据概况" in prompt
+
+
+def test_compact_profile_keeps_paths_for_all_tables_under_budget():
+    step = Step(id="s1", tool="python", description="统计", instruction="统计前两个表")
+    profile = {
+        "tables": [
+            {
+                "table_id": "主表-在途业扩工单_t1",
+                "source": "主表-在途业扩工单!A1:AF108",
+                "path": "normalized/主表-在途业扩工单_t1.xlsx",
+                "shape": {"rows": 106, "cols": 32},
+                "columns_detail": [
+                    {"name": "正式受理日期", "dtype": "datetime64[us]"},
+                    {"name": "接火送电", "dtype": "datetime64[us]"},
+                    {"name": "增减容量", "dtype": "int64"},
+                ],
+                "warnings": ["公式没有缓存计算值"] * 20,
+            },
+            {
+                "table_id": "已归档工单_t1",
+                "source": "已归档工单!A1:AE418",
+                "path": "normalized/已归档工单_t1.xlsx",
+                "shape": {"rows": 416, "cols": 31},
+                "columns_detail": [
+                    {"name": "正式受理日期", "dtype": "datetime64[us]"},
+                    {"name": "接火送电", "dtype": "datetime64[us]"},
+                    {"name": "增减容量", "dtype": "int64"},
+                ],
+            },
+        ],
+    }
+    context = TaskContext(
+        task_id="t1",
+        user_query="只分析第一第二个 sheet",
+        workbook_manifest={},
+        data_profile=profile,
+        plan=ExecutionPlan([step]),
+    )
+
+    prompt = PromptAssembler().assemble(context, step)
+
+    assert "normalized/主表-在途业扩工单_t1.xlsx" in prompt
+    assert "normalized/已归档工单_t1.xlsx" in prompt
+    assert "*_preview.xlsx" in prompt
+    assert "不要用 glob" in prompt
+    assert "接火送电/送电日期" in prompt

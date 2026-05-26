@@ -8,3 +8,6 @@ prompt_playground = false
 [UI]
 name = "Excel 智能分析 Agent"
 description = "上传 Excel，用自然语言分析数据"
+
+[meta]
+generated_by = "2.11.1"
