@@ -98,21 +98,31 @@ class Orchestrator:
 
         if session.is_follow_up and session.profile is not None:
             # 追问：复用已有预处理结果
+            logger.info("追问模式，复用缓存的预处理结果")
             manifest = session.workbook_manifest or {}
             profile = session.profile
         else:
             # 首次分析：全流程
+            logger.info("首次分析，开始全流程: Ingest → Preprocess → Profile → Plan → Execute → Report")
             raw_file_path = Path(workspace.save_upload(session.file_path)).resolve()
+            logger.info("文件已复制到 workspace: %s", raw_file_path)
+
             normalized_dir = (Path(workspace.path) / "normalized").resolve()
             manifest = self.tools.ingestor.scan(raw_file_path)
+            logger.info("Ingest 完成, sheets=%s", list(manifest.keys()) if isinstance(manifest, dict) else "N/A")
+
             preprocess_result = self.tools.preprocessor.process(
                 file_path=raw_file_path,
                 manifest=manifest,
                 output_dir=normalized_dir,
             )
             tables = preprocess_result.tables
+            logger.info("Preprocess 完成, 表数=%d", len(tables))
+
             workspace.save_artifacts(tables)
             profile = self.tools.profiler.profile(tables)
+            logger.info("Profile 完成, 表数=%d", len(profile) if isinstance(profile, (dict, list)) else 0)
+
             session.cache_preprocessing(
                 workbook_manifest=manifest,
                 profile=profile,
@@ -134,7 +144,12 @@ class Orchestrator:
             context.key_findings = follow_up.get("prior_findings", [])
 
         # LLM 规划
+        logger.info("开始 LLM 规划...")
         plan = await self._plan(context, session)
+        logger.info("规划完成, steps=%d, outline=%d",
+                     len(plan.steps), len(plan.report_outline) if plan.report_outline else 0)
+        for s in plan.steps:
+            logger.info("  Step %s [%s]: %s", s.id, s.tool, s.description)
         workspace.save_json("plan.json", plan.to_dict())
 
         # 执行
@@ -166,7 +181,8 @@ class Orchestrator:
             )
 
         prompt = (
-            "你是数据分析规划器。根据用户需求和数据概况，输出 JSON 格式的执行计划。\n\n"
+            "你是数据分析规划器。根据用户需求和数据概况，输出 JSON 格式的执行计划。\n"
+            "只输出一个 JSON 对象，不要解释，不要输出思考过程，不要输出 markdown。\n\n"
             f"## 用户需求\n{context.user_query}\n\n"
             f"## 数据概况\n{profile_text}\n"
             f"{follow_up_section}\n"
@@ -186,33 +202,19 @@ class Orchestrator:
         )
 
         response = await self.llm.call(prompt, max_tokens=2000)
-        return self._parse_plan(response)
+        return self._parse_plan(response, fallback_instruction=context.user_query)
 
-    def _parse_plan(self, response: str) -> ExecutionPlan:
+    def _parse_plan(self, response: str, fallback_instruction: str = "") -> ExecutionPlan:
         """Parse LLM response into an ExecutionPlan with fallback."""
         text = response.strip()
 
-        # Try extracting from code block
-        if "```" in text:
-            parts = text.split("```")
-            for part in parts:
-                candidate = part.strip()
-                if candidate.startswith("json"):
-                    candidate = candidate[4:].strip()
-                try:
-                    data = json.loads(candidate)
-                    if isinstance(data, dict) and "steps" in data:
-                        return self._dict_to_plan(data)
-                except (json.JSONDecodeError, ValueError):
-                    continue
-
-        # Try parsing whole response as JSON
-        try:
-            data = json.loads(text)
-            if isinstance(data, dict) and "steps" in data:
+        for candidate in self._json_candidates(text):
+            try:
+                data = json.loads(candidate)
+            except (json.JSONDecodeError, ValueError):
+                continue
+            if isinstance(data, dict) and ("steps" in data or "plan" in data):
                 return self._dict_to_plan(data)
-        except (json.JSONDecodeError, ValueError):
-            pass
 
         # Fallback: single generic step
         logger.warning("无法解析 Plan 响应，使用默认单步计划")
@@ -221,12 +223,63 @@ class Orchestrator:
                 id="s1",
                 tool="python",
                 description="分析数据",
-                instruction=f"根据用户需求分析数据: {text[:200]}",
+                instruction=fallback_instruction or "根据用户需求完成数据分析并输出结果。",
                 is_exploratory=True,
             ),
         ])
 
+    def _json_candidates(self, text: str) -> list[str]:
+        """Return likely JSON payloads from a chatty LLM response."""
+        candidates: list[str] = []
+        stripped = text.strip()
+        if stripped:
+            candidates.append(stripped)
+
+        if "```" in text:
+            parts = text.split("```")
+            for part in parts:
+                candidate = part.strip()
+                if candidate.startswith("json"):
+                    candidate = candidate[4:].strip()
+                if candidate:
+                    candidates.append(candidate)
+
+        first = text.find("{")
+        last = text.rfind("}")
+        if first != -1 and last > first:
+            candidates.append(text[first : last + 1].strip())
+
+        seen: set[str] = set()
+        unique = []
+        for candidate in candidates:
+            if candidate not in seen:
+                seen.add(candidate)
+                unique.append(candidate)
+        return unique
+
     def _dict_to_plan(self, data: dict) -> ExecutionPlan:
+        if "steps" not in data and isinstance(data.get("plan"), list):
+            plan_items = data.get("plan") or []
+            instruction_parts = []
+            for item in plan_items:
+                if not isinstance(item, dict):
+                    continue
+                name = str(item.get("name") or item.get("step") or "").strip()
+                description = str(item.get("description") or "").strip()
+                line = "：".join(part for part in (name, description) if part)
+                if line:
+                    instruction_parts.append(line)
+            if instruction_parts:
+                return ExecutionPlan(steps=[
+                    Step(
+                        id="s1",
+                        tool="python",
+                        description="按规划完成数据分析",
+                        instruction="\n".join(instruction_parts),
+                        is_exploratory=False,
+                    )
+                ], report_outline=data.get("report_outline", []))
+
         steps = []
         for item in data.get("steps", []):
             if isinstance(item, dict) and item.get("id"):
@@ -259,6 +312,7 @@ class Orchestrator:
 
             plan.mark_running(step.id)
             workspace.write_state(status="executing", current_step=step.id)
+            logger.info("▶ 执行 Step %s [%s]: %s", step.id, step.tool, step.description)
 
             on_start = getattr(self, "_on_step_start", None)
             if on_start:
@@ -272,6 +326,7 @@ class Orchestrator:
                 check = self.tools.checker.validate(step, result, context, workspace)
 
             if result.failed or check.status == "failed":
+                logger.error("✗ Step %s 失败: %s", step.id, (result.error or check.to_prompt_text())[:200])
                 plan.mark_failed(step.id, result.error or check.to_prompt_text(), check.status)
                 if result.retries_exhausted and hasattr(self.tools, "planner"):
                     plan = await self._replan(context, step, result.error or check.to_prompt_text())
@@ -297,6 +352,8 @@ class Orchestrator:
                     description=step.description,
                 )
 
+            logger.info("✓ Step %s 完成, 产出文件=%d, stdout=%d chars",
+                        step.id, len(result.output_files), len(result.stdout or ""))
             context.update_workspace_files(workspace.list_files())
             context.update_artifacts(workspace.read_artifact_manifest())
             plan.mark_done(step.id, check=check.status)
@@ -313,8 +370,10 @@ class Orchestrator:
                 workspace.save_json("plan.json", plan.to_dict())
 
         # 生成报告（有 outline 时分章节 LLM 调用，无 outline 时简单汇总）
+        logger.info("所有步骤执行完毕，开始生成报告...")
         try:
             report = await self.reporter.generate(context, workspace)
+            logger.info("报告生成完成, 长度=%d chars", len(report))
         except Exception:
             logger.exception("Reporter 生成报告失败，降级为简单汇总")
             report = self.reporter._assemble_simple_response(context, workspace)
@@ -522,7 +581,14 @@ class Orchestrator:
 
     def _extract_code_block(self, text: str) -> str:
         if "```" not in text:
-            return text.strip()
+            stripped = text.strip()
+            if stripped.startswith(("{", "[")):
+                return (
+                    "raise RuntimeError("
+                    "'LLM did not return executable Python code; response looked like JSON or a plan.'"
+                    ")"
+                )
+            return stripped
         parts = text.split("```")
         for part in parts:
             candidate = part.strip()

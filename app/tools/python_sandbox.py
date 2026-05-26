@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import ast
+import logging
 import os
 import platform
 import subprocess
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 
 class SandboxPolicyError(RuntimeError):
@@ -60,7 +63,7 @@ class PythonSandbox:
         attempt: int = 0,
         timeout: int | None = None,
     ) -> ExecResult:
-        workdir = Path(workdir)
+        workdir = Path(workdir).resolve()
         timeout = timeout or self.timeout
         try:
             self._static_check(code)
@@ -69,8 +72,9 @@ class PythonSandbox:
 
         scripts_dir = workdir / "scripts"
         scripts_dir.mkdir(parents=True, exist_ok=True)
-        script_path = scripts_dir / f"{step_id}_attempt_{attempt}.py"
+        script_path = (scripts_dir / f"{step_id}_attempt_{attempt}.py").resolve()
         script_path.write_text(code, encoding="utf-8")
+        logger.info("沙箱执行: %s (代码 %d chars, timeout=%ds)", script_path.name, len(code), timeout)
 
         try:
             preexec = self._limit_resources if platform.system() != "Windows" else None
@@ -91,13 +95,20 @@ class PythonSandbox:
                 script_path=str(script_path),
             )
 
-        return ExecResult(
+        exec_result = ExecResult(
             success=result.returncode == 0,
             stdout=result.stdout[: self.max_stdout_chars],
             stderr=result.stderr[-self.max_stdout_chars :],
             output_files=self._list_output_files(workdir),
             script_path=str(script_path),
         )
+        if exec_result.success:
+            logger.info("沙箱执行成功, stdout=%d chars, 产出文件=%s",
+                        len(exec_result.stdout), exec_result.output_files or "无")
+        else:
+            logger.warning("沙箱执行失败 (returncode=%d), stderr=%s",
+                           result.returncode, exec_result.stderr[:300])
+        return exec_result
 
     def _static_check(self, code: str) -> None:
         # 1. 字符串片段快检

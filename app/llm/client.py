@@ -19,8 +19,8 @@ class LLMClient:
         base_url: str,
         model: str,
         api_key: str = "",
-        thinking: bool = True,
-        effort: str = "max",
+        thinking: bool = False,
+        effort: str = "",
     ):
         self.base_url = base_url.rstrip("/")
         self.model = model
@@ -56,6 +56,8 @@ class LLMClient:
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
 
+        logger.info("LLM 请求: model=%s, prompt=%d chars, max_tokens=%d",
+                    self.model, len(prompt), max_tokens)
         client = await self._get_client()
         try:
             response = await client.post(
@@ -80,7 +82,8 @@ class LLMClient:
         message = choices[0].get("message", {})
         content = message.get("content") or ""
         if not content.strip() and message.get("reasoning_content"):
-            content = message["reasoning_content"]
+            logger.warning("LLM response only contained reasoning_content; ignoring it as executable output")
+        logger.info("LLM 响应: %d chars", len(content))
         return content
 
     def count_tokens(self, text: str) -> int:

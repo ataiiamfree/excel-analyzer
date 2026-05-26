@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import sys
+import mimetypes
 from pathlib import Path
 
 # Ensure project root is on sys.path so `app.*` imports work when
@@ -15,6 +17,14 @@ if _PROJECT_ROOT not in sys.path:
 from dotenv import load_dotenv
 load_dotenv(Path(_PROJECT_ROOT) / ".env")
 
+# ── 日志配置 ──────────────────────────────────────────────
+_LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
+logging.basicConfig(
+    level=getattr(logging, _LOG_LEVEL, logging.INFO),
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    datefmt="%H:%M:%S",
+)
+
 import chainlit as cl
 
 from app.agent.orchestrator import build_orchestrator, StepResult
@@ -23,6 +33,28 @@ from app.session import Session
 
 
 EXCEL_EXTENSIONS = {".xlsx", ".xlsm"}
+DOWNLOADABLE_EXTENSIONS = {
+    ".xlsx", ".xlsm", ".xls", ".csv", ".tsv", ".parquet", ".pdf",
+    ".png", ".jpg", ".jpeg", ".svg",
+}
+
+
+def _report_for_ui(report: str) -> str:
+    """Remove relative artifact links that are sent separately as elements."""
+    marker = "\n## 附件"
+    if marker in report:
+        return report.split(marker, 1)[0].rstrip()
+    if report.startswith("## 附件"):
+        return ""
+    return report
+
+
+def _mime_for_path(path: str) -> str:
+    suffix = Path(path).suffix.lower()
+    if suffix in {".xlsx", ".xlsm"}:
+        return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    guessed, _ = mimetypes.guess_type(path)
+    return guessed or "application/octet-stream"
 
 
 @cl.on_chat_start
@@ -89,7 +121,7 @@ async def main(message: cl.Message):
         return
 
     # Send report
-    await cl.Message(content=task_result.report).send()
+    await cl.Message(content=_report_for_ui(task_result.report)).send()
 
     # Send charts and downloadable files
     elements: list[cl.Element] = []
@@ -98,10 +130,13 @@ async def main(message: cl.Message):
         full_path = fpath if os.path.isabs(fpath) else str(Path(fpath))
         if not os.path.exists(full_path):
             continue
-        if fpath.lower().endswith((".png", ".jpg", ".jpeg", ".svg")):
+        suffix = Path(full_path).suffix.lower()
+        if suffix not in DOWNLOADABLE_EXTENSIONS:
+            continue
+        if suffix in {".png", ".jpg", ".jpeg", ".svg"}:
             elements.append(cl.Image(path=full_path, name=name, display="inline"))
         else:
-            elements.append(cl.File(path=full_path, name=name))
+            elements.append(cl.File(path=full_path, name=name, mime=_mime_for_path(full_path)))
 
     if elements:
         await cl.Message(content="分析产物：", elements=elements).send()
