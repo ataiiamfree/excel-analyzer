@@ -19,10 +19,14 @@ load_dotenv(Path(_PROJECT_ROOT) / ".env")
 
 # ── 日志配置 ──────────────────────────────────────────────
 _LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
+_LOG_FILE = Path(_PROJECT_ROOT) / "runtime.log"
+_handlers: list[logging.Handler] = [logging.StreamHandler()]
+_handlers.append(logging.FileHandler(_LOG_FILE, encoding="utf-8"))
 logging.basicConfig(
     level=getattr(logging, _LOG_LEVEL, logging.INFO),
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     datefmt="%H:%M:%S",
+    handlers=_handlers,
 )
 
 import chainlit as cl

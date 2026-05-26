@@ -38,6 +38,7 @@ htmlcov/
 
 # 日志
 *.log
+runtime.log
 
 # Chainlit 运行时生成的默认翻译文件
 .chainlit/translations/

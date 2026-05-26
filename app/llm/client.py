@@ -42,7 +42,9 @@ class LLMClient:
         prompt: str,
         max_tokens: int = 8000,
         temperature: float = 0.1,
+        thinking: bool | None = None,
     ) -> str:
+        use_thinking = self.thinking if thinking is None else thinking
         payload: dict = {
             "model": self.model,
             "messages": [{"role": "user", "content": prompt}],
@@ -50,7 +52,7 @@ class LLMClient:
             "temperature": temperature,
         }
         # DeepSeek 思考模式
-        if self.thinking:
+        if use_thinking:
             payload["thinking"] = {"type": "enabled"}
         # DeepSeek 最大推理力度
         if self.effort:

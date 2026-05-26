@@ -202,7 +202,8 @@ class Orchestrator:
         )
 
         try:
-            response = await self.llm.call(prompt, max_tokens=2000)
+            # 规划调用关闭思考模式：输出是结构化 JSON，不需要深度推理
+            response = await self.llm.call(prompt, max_tokens=4000, thinking=False)
         except Exception as exc:
             logger.warning("LLM 规划调用失败，使用默认单步计划: %s", exc)
             return ExecutionPlan(steps=[
@@ -436,7 +437,7 @@ class Orchestrator:
         self, step: Step, context: TaskContext, workspace: Any
     ) -> StepResult:
         prompt = self.assembler.assemble(context, step)
-        code_response = await self.llm.call(prompt)
+        code_response = await self.llm.call(prompt, max_tokens=16000)
         code = self._extract_code_block(code_response)
         exec_result = self.tools.sandbox.execute(
             code=code,
@@ -536,7 +537,7 @@ class Orchestrator:
     async def _adapt(self, context: TaskContext, step: Step, result: StepResult) -> PlanAdjustment:
         """轻量 LLM 调用，根据执行结果调整后续计划。"""
         prompt = self.assembler.assemble_adapt(context, step, result.stdout)
-        response = await self.llm.call(prompt, max_tokens=500)
+        response = await self.llm.call(prompt, max_tokens=2000, thinking=False)
         return self._parse_adjustment(response)
 
     def _parse_adjustment(self, response: str) -> PlanAdjustment:

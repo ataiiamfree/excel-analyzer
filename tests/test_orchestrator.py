@@ -461,7 +461,7 @@ def test_parse_plan_fallback_on_invalid_json():
 
 def test_plan_falls_back_when_llm_call_fails():
     class EmptyLLM:
-        async def call(self, prompt, max_tokens=2000, temperature=0.1):
+        async def call(self, prompt, max_tokens=2000, temperature=0.1, thinking=None):
             raise RuntimeError("LLM 响应为空")
 
     session = Session.create(file_path="input.xlsx")
@@ -565,7 +565,7 @@ def test_run_first_analysis_preprocesses_into_workspace(tmp_path):
     workbook.save(workbook_path)
 
     class PlanningLLM:
-        async def call(self, prompt, max_tokens=2000, temperature=0.1):
+        async def call(self, prompt, max_tokens=2000, temperature=0.1, thinking=None):
             return '{"steps": [], "report_outline": []}'
 
     config = SimpleNamespace(
