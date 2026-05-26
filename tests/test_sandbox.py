@@ -58,6 +58,21 @@ def test_execute_safe_script(tmp_path):
     assert "hello" in result.stdout
 
 
+def test_execute_with_relative_workdir_uses_absolute_script_path(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    sandbox = PythonSandbox(timeout=10)
+
+    result = sandbox.execute(
+        code='print("hello from relative workdir")',
+        workdir="workspace/task1",
+        step_id="s1",
+        attempt=0,
+    )
+
+    assert result.success is True
+    assert "hello from relative workdir" in result.stdout
+
+
 def test_default_python_executable_matches_current_runtime():
     sandbox = PythonSandbox()
     assert sandbox.python_executable == sys.executable

@@ -143,7 +143,7 @@ class Orchestrator:
             follow_up = session.build_follow_up_context()
             context.key_findings = follow_up.get("prior_findings", [])
 
-        # LLM 规划
+        # LLM 规划（_plan 内部已有 fallback，不会抛异常）
         logger.info("开始 LLM 规划...")
         plan = await self._plan(context, session)
         logger.info("规划完成, steps=%d, outline=%d",
@@ -201,7 +201,19 @@ class Orchestrator:
             "确保 steps 按执行顺序排列，depends_on 引用已有 step id。\n"
         )
 
-        response = await self.llm.call(prompt, max_tokens=2000)
+        try:
+            response = await self.llm.call(prompt, max_tokens=2000)
+        except Exception as exc:
+            logger.warning("LLM 规划调用失败，使用默认单步计划: %s", exc)
+            return ExecutionPlan(steps=[
+                Step(
+                    id="s1",
+                    tool="python",
+                    description="分析数据",
+                    instruction=context.user_query or "根据用户需求完成数据分析并输出结果。",
+                    is_exploratory=True,
+                )
+            ])
         return self._parse_plan(response, fallback_instruction=context.user_query)
 
     def _parse_plan(self, response: str, fallback_instruction: str = "") -> ExecutionPlan:
@@ -402,7 +414,17 @@ class Orchestrator:
                 error=f"未注册的 skill 类型: {step.tool}",
                 retries_exhausted=True,
             )
-        return await executor(step, context, workspace)
+        try:
+            return await executor(step, context, workspace)
+        except Exception as exc:
+            logger.exception("步骤执行异常: %s", step.id)
+            return StepResult(
+                stdout="",
+                files=[],
+                failed=True,
+                error=f"{type(exc).__name__}: {exc}",
+                retries_exhausted=True,
+            )
 
     async def _execute_knowledge(
         self, step: Step, context: TaskContext, workspace: Any
@@ -582,6 +604,8 @@ class Orchestrator:
     def _extract_code_block(self, text: str) -> str:
         if "```" not in text:
             stripped = text.strip()
+            if not stripped:
+                return "raise RuntimeError('LLM returned an empty response instead of Python code.')"
             if stripped.startswith(("{", "[")):
                 return (
                     "raise RuntimeError("
@@ -593,7 +617,8 @@ class Orchestrator:
         for part in parts:
             candidate = part.strip()
             if candidate.startswith("python"):
-                return candidate.removeprefix("python").strip()
+                code = candidate.removeprefix("python").strip()
+                return code or "raise RuntimeError('LLM returned an empty Python code block.')"
         return parts[1].strip()
 
 
@@ -614,6 +639,7 @@ def build_orchestrator(config: Any | None = None) -> Orchestrator:
         base_url=cfg.llm_base_url,
         model=cfg.llm_model,
         api_key=cfg.llm_api_key,
+        timeout=cfg.llm_timeout_seconds,
     )
     tools = SimpleNamespace(
         ingestor=WorkbookIngestor(),

@@ -41,3 +41,6 @@ htmlcov/
 
 # Chainlit 运行时生成的默认翻译文件
 .chainlit/translations/
+
+# docs 子目录下 Chainlit 运行时生成的配置（非项目文件）
+docs/.chainlit/

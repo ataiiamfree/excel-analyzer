@@ -39,7 +39,7 @@ def test_prompt_budget_raises_cleanly_when_no_degradable_section_fits():
 def test_prompt_budget_compresses_named_summary_section():
     # 设置一个较小的 budget，使得 300 chars 的 summaries 必须被压缩
     BUDGET_PRESETS["small"] = {
-        "max_prompt_tokens": 220,
+        "max_prompt_tokens": 340,
         "step_summaries": 20,
         "max_summary_per_step": 200,
         "max_findings": 3,
@@ -98,7 +98,7 @@ def test_assemble_adapt_includes_key_sections():
 def test_degradable_sections_removed_when_over_budget():
     """当压缩摘要和文件列表都不够时，应逐个移除 degradable 段。"""
     BUDGET_PRESETS["tight"] = {
-        "max_prompt_tokens": 260,
+        "max_prompt_tokens": 340,
         "step_summaries": 10,
         "max_summary_per_step": 10,
         "max_findings": 1,
@@ -166,3 +166,4 @@ def test_compact_profile_keeps_paths_for_all_tables_under_budget():
     assert "*_preview.xlsx" in prompt
     assert "不要用 glob" in prompt
     assert "接火送电/送电日期" in prompt
+    assert "format='mixed'" in prompt

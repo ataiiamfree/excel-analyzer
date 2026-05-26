@@ -33,10 +33,7 @@ class WorkbookIngestor:
                 notes: list[str] = []
                 confidence = 0.7
                 if auto_filter_header is not None and min_row <= auto_filter_header <= max_row:
-                    header_candidates = self._prepend_candidate(
-                        header_candidates,
-                        auto_filter_header,
-                    )
+                    header_candidates = [auto_filter_header]
                     notes.append(f"AutoFilter 表头强信号: {auto_filter_ref}")
                     confidence = 0.95
                 tables.append(
@@ -175,9 +172,6 @@ class WorkbookIngestor:
         except ValueError:
             return None
         return min_row
-
-    def _prepend_candidate(self, candidates: list[int], candidate: int) -> list[int]:
-        return [candidate, *[item for item in candidates if item != candidate]][:3]
 
     def _header_candidates(
         self, worksheet: Any, bounds: tuple[int, int, int, int]

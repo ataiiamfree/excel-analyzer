@@ -452,10 +452,73 @@ def test_parse_plan_from_code_block():
 
 def test_parse_plan_fallback_on_invalid_json():
     orch = Orchestrator(llm_client=None, tools=None, config=_make_config())
-    plan = orch._parse_plan("这不是有效的 JSON 响应")
+    plan = orch._parse_plan("这不是有效的 JSON 响应", fallback_instruction="统计销售额")
     assert len(plan.steps) == 1
     assert plan.steps[0].id == "s1"
+    assert plan.steps[0].instruction == "统计销售额"
     assert plan.steps[0].is_exploratory is True
+
+
+def test_plan_falls_back_when_llm_call_fails():
+    class EmptyLLM:
+        async def call(self, prompt, max_tokens=2000, temperature=0.1):
+            raise RuntimeError("LLM 响应为空")
+
+    session = Session.create(file_path="input.xlsx")
+    context = TaskContext("t1", "统计库存健康", {}, {})
+    orch = Orchestrator(llm_client=EmptyLLM(), tools=None, config=_make_config())
+
+    plan = asyncio.run(orch._plan(context, session))
+
+    assert len(plan.steps) == 1
+    assert plan.steps[0].instruction == "统计库存健康"
+
+
+def test_parse_plan_extracts_json_from_chatty_response():
+    orch = Orchestrator(llm_client=None, tools=None, config=_make_config())
+    response = '我先分析一下。\n{"steps": [{"id": "s1", "tool": "python", "description": "x", "instruction": "y"}]}\n完成。'
+
+    plan = orch._parse_plan(response)
+
+    assert len(plan.steps) == 1
+    assert plan.steps[0].instruction == "y"
+
+
+def test_extract_code_block_rejects_json_plan_as_python():
+    orch = Orchestrator(llm_client=None, tools=None, config=_make_config())
+
+    code = orch._extract_code_block('{"plan": [{"step": 1, "description": "do work"}]}')
+
+    assert "LLM did not return executable Python code" in code
+
+
+def test_extract_code_block_rejects_empty_response_as_python():
+    orch = Orchestrator(llm_client=None, tools=None, config=_make_config())
+
+    code = orch._extract_code_block("")
+
+    assert "LLM returned an empty response" in code
+
+
+def test_execute_step_catches_executor_exception():
+    class ExplodingOrchestrator(Orchestrator):
+        async def _execute_python(self, step, context, workspace):
+            raise RuntimeError("LLM 响应为空")
+
+    step = Step(id="s1", tool="python", description="x", instruction="x")
+    context = TaskContext("t1", "q", {}, {})
+    workspace = FakeWorkspace()
+    orch = ExplodingOrchestrator(
+        llm_client=None,
+        tools=SimpleNamespace(checker=FakeChecker()),
+        config=_make_config(),
+    )
+
+    result = asyncio.run(orch._execute_step(step, context, workspace))
+
+    assert result.failed is True
+    assert result.retries_exhausted is True
+    assert "LLM 响应为空" in result.error
 
 
 def test_step_callbacks_called():

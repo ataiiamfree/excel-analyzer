@@ -32,6 +32,9 @@ from app.agent.plan import Step
 from app.session import Session
 
 
+logger = logging.getLogger(__name__)
+
+
 EXCEL_EXTENSIONS = {".xlsx", ".xlsm"}
 DOWNLOADABLE_EXTENSIONS = {
     ".xlsx", ".xlsm", ".xls", ".csv", ".tsv", ".parquet", ".pdf",
@@ -117,6 +120,7 @@ async def main(message: cl.Message):
             on_step_end=on_step_end,
         )
     except Exception as e:
+        logger.exception("分析过程出错")
         await cl.Message(content=f"分析过程出错：{e}").send()
         return
 

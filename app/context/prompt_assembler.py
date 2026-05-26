@@ -288,9 +288,13 @@ class PromptAssembler:
         if tool == "python":
             return (
                 "你是 Python 数据分析专家。读取 normalized parquet/xlsx，"
+                "只输出完整、可直接执行的 Python 脚本，不要输出 JSON 计划、markdown 或解释。"
                 "必须优先使用数据概况中 tables[].path 指向的正式数据文件，"
                 "不要扫描 normalized 目录，不要读取 *_preview.xlsx。"
                 "写代码前必须根据数据概况里的 columns 确认列名；"
+                "日期字段可能同时出现 yyyy-mm-dd、yyyy/mm/dd、yyyy.mm.dd、Excel 日期等混合格式，"
+                "使用 pandas 转换日期时必须容错处理（如 errors='coerce'，支持时使用 format='mixed'），"
+                "不要让单个异常日期格式导致脚本失败。"
                 "不同 sheet 的同一业务字段可能列名不同，必须做同义/包含匹配，"
                 "例如 送电时间 可匹配 接火送电/送电日期，"
                 "报装容量 可匹配 增减容量/新减增容量(kVA)。"

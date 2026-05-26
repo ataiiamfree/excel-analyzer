@@ -19,6 +19,7 @@ class Config:
     budget_preset: str = field(default_factory=lambda: os.getenv("BUDGET_PRESET", "deepseek"))
 
     workspace_dir: str = field(default_factory=lambda: os.getenv("WORKSPACE_DIR", "./workspace"))
+    llm_timeout_seconds: float = field(default_factory=lambda: float(os.getenv("LLM_TIMEOUT_SECONDS", "180")))
     sandbox_timeout: int = field(default_factory=lambda: int(os.getenv("SANDBOX_TIMEOUT", "60")))
     sandbox_memory_mb: int = field(default_factory=lambda: int(os.getenv("SANDBOX_MEMORY_MB", "1024")))
     max_stdout_chars: int = field(default_factory=lambda: int(os.getenv("MAX_STDOUT_CHARS", "20000")))

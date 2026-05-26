@@ -21,17 +21,20 @@ class LLMClient:
         api_key: str = "",
         thinking: bool = False,
         effort: str = "",
+        timeout: float = 180,
     ):
         self.base_url = base_url.rstrip("/")
         self.model = model
         self.api_key = api_key
         self.thinking = thinking
         self.effort = effort
+        self.timeout = timeout
         self._client: httpx.AsyncClient | None = None
 
     async def _get_client(self) -> httpx.AsyncClient:
         if self._client is None or self._client.is_closed:
-            self._client = httpx.AsyncClient(timeout=300)
+            timeout = httpx.Timeout(self.timeout, connect=30)
+            self._client = httpx.AsyncClient(timeout=timeout)
         return self._client
 
     async def call(
@@ -83,6 +86,9 @@ class LLMClient:
         content = message.get("content") or ""
         if not content.strip() and message.get("reasoning_content"):
             logger.warning("LLM response only contained reasoning_content; ignoring it as executable output")
+        if not content.strip():
+            finish_reason = choices[0].get("finish_reason")
+            raise LLMError(f"LLM 响应为空: finish_reason={finish_reason}")
         logger.info("LLM 响应: %d chars", len(content))
         return content
 
