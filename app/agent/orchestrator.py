@@ -94,15 +94,16 @@ class Orchestrator:
         On follow-ups (session.is_follow_up), skips Ingest/Preprocess/Profile
         and reuses cached session data.
         """
-        workspace = Workspace(root=self.config.workspace_dir)
-
         if session.is_follow_up and session.profile is not None:
-            # 追问：复用已有预处理结果
-            logger.info("追问模式，复用缓存的预处理结果")
+            # 追问：复用首次分析的 workspace（数据文件在那里）
+            first_task_id = session.tasks[0] if session.tasks else None
+            workspace = Workspace(root=self.config.workspace_dir, task_id=first_task_id)
+            logger.info("追问模式，复用 workspace %s", workspace.task_id)
             manifest = session.workbook_manifest or {}
             profile = session.profile
         else:
-            # 首次分析：全流程
+            # 首次分析：新 workspace + 全流程
+            workspace = Workspace(root=self.config.workspace_dir)
             logger.info("首次分析，开始全流程: Ingest → Preprocess → Profile → Plan → Execute → Report")
             raw_file_path = Path(workspace.save_upload(session.file_path)).resolve()
             logger.info("文件已复制到 workspace: %s", raw_file_path)
