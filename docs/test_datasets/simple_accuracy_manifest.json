@@ -1,0 +1,736 @@
+{
+  "id": "simple-accuracy",
+  "description": "精选简单测试题，带结构化标准答案，用于验证数值准确率。",
+  "cases": [
+    {
+      "id": "simple-01-q01",
+      "file": "simple/01_门店月度销售.xlsx",
+      "question": "哪家门店上半年总销售额最高？各门店排名如何？ 请输出结构化结果表（Excel 或 CSV），不要只在报告里写结论；结果表中保留用于核对的关键数值。",
+      "tests": [
+        "分组聚合",
+        "排序",
+        "数值准确率"
+      ],
+      "assertions": {
+        "expected_row_count": {
+          "name": "门店排名行数",
+          "count": 5
+        },
+        "expected_values": [
+          {
+            "name": "杭州西湖店总销售额",
+            "row_contains": "杭州西湖店",
+            "expected": 753.3,
+            "abs_tol": 0.01
+          },
+          {
+            "name": "北京旗舰店总销售额",
+            "row_contains": "北京旗舰店",
+            "expected": 739.7,
+            "abs_tol": 0.01
+          },
+          {
+            "name": "上海南京路店总销售额",
+            "row_contains": "上海南京路店",
+            "expected": 664.9,
+            "abs_tol": 0.01
+          },
+          {
+            "name": "广州天河店总销售额",
+            "row_contains": "广州天河店",
+            "expected": 664.8,
+            "abs_tol": 0.01
+          },
+          {
+            "name": "成都春熙路店总销售额",
+            "row_contains": "成都春熙路店",
+            "expected": 566.7,
+            "abs_tol": 0.01
+          }
+        ],
+        "report_must_mention": [
+          {
+            "name": "最高门店",
+            "terms": [
+              "杭州西湖店",
+              "最高"
+            ],
+            "within_chars": 120,
+            "required": false
+          }
+        ]
+      }
+    },
+    {
+      "id": "simple-02-q01",
+      "file": "simple/02_员工花名册.xlsx",
+      "question": "各部门平均薪资是多少？哪个部门最高？ 请输出结构化结果表（Excel 或 CSV），不要只在报告里写结论；结果表中保留用于核对的关键数值。",
+      "tests": [
+        "分组均值",
+        "最高值判断",
+        "数值准确率"
+      ],
+      "assertions": {
+        "expected_row_count": {
+          "name": "部门平均薪资行数",
+          "count": 5
+        },
+        "expected_values": [
+          {
+            "name": "运营部平均薪资",
+            "row_contains": "运营部",
+            "expected": 20248.3333,
+            "abs_tol": 0.01
+          },
+          {
+            "name": "人事部平均薪资",
+            "row_contains": "人事部",
+            "expected": 19430.0,
+            "abs_tol": 0.01
+          },
+          {
+            "name": "财务部平均薪资",
+            "row_contains": "财务部",
+            "expected": 18052.0,
+            "abs_tol": 0.01
+          },
+          {
+            "name": "市场部平均薪资",
+            "row_contains": "市场部",
+            "expected": 16916.6667,
+            "abs_tol": 0.01
+          },
+          {
+            "name": "技术部平均薪资",
+            "row_contains": "技术部",
+            "expected": 15903.6667,
+            "abs_tol": 0.01
+          }
+        ],
+        "report_must_mention": [
+          {
+            "name": "最高薪资部门",
+            "terms": [
+              "运营部",
+              "最高"
+            ],
+            "within_chars": 120,
+            "required": false
+          }
+        ]
+      }
+    },
+    {
+      "id": "simple-03-q02",
+      "file": "simple/03_考试成绩单.xlsx",
+      "question": "总分前 5 名的学生是谁？ 请输出结构化结果表（Excel 或 CSV），不要只在报告里写结论；结果表中保留用于核对的关键数值。",
+      "tests": [
+        "多列求和",
+        "Top N 排序",
+        "数值准确率"
+      ],
+      "assertions": {
+        "expected_row_count": {
+          "name": "总分前五行数",
+          "count": 5
+        },
+        "expected_values": [
+          {
+            "name": "学生3005总分",
+            "row_contains": "学生3005",
+            "expected": 417.0,
+            "abs_tol": 0
+          },
+          {
+            "name": "学生1004总分",
+            "row_contains": "学生1004",
+            "expected": 407.0,
+            "abs_tol": 0
+          },
+          {
+            "name": "学生1006总分",
+            "row_contains": "学生1006",
+            "expected": 400.0,
+            "abs_tol": 0
+          },
+          {
+            "name": "学生1002总分",
+            "row_contains": "学生1002",
+            "expected": 396.0,
+            "abs_tol": 0
+          },
+          {
+            "name": "学生1009总分",
+            "row_contains": "学生1009",
+            "expected": 394.0,
+            "abs_tol": 0
+          }
+        ],
+        "expected_rows": [
+          {
+            "name": "包含学生3005",
+            "row_contains": [
+              "学生3005",
+              "417"
+            ]
+          },
+          {
+            "name": "包含学生1004",
+            "row_contains": [
+              "学生1004",
+              "407"
+            ]
+          },
+          {
+            "name": "包含学生1006",
+            "row_contains": [
+              "学生1006",
+              "400"
+            ]
+          },
+          {
+            "name": "包含学生1002",
+            "row_contains": [
+              "学生1002",
+              "396"
+            ]
+          },
+          {
+            "name": "包含学生1009",
+            "row_contains": [
+              "学生1009",
+              "394"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "simple-04-q01",
+      "file": "simple/04_产品库存表.xlsx",
+      "question": "哪些产品库存低于安全库存？列出需要补货的清单，并计算补货量=安全库存-库存数量。 请输出结构化结果表（Excel 或 CSV），不要只在报告里写结论；结果表中保留用于核对的关键数值。",
+      "tests": [
+        "条件筛选",
+        "补货量计算",
+        "数值准确率"
+      ],
+      "assertions": {
+        "expected_row_count": {
+          "name": "低库存商品行数",
+          "count": 3
+        },
+        "expected_values": [
+          {
+            "name": "E003补货量",
+            "row_contains": [
+              "E003",
+              "数据线"
+            ],
+            "expected": 26.0,
+            "abs_tol": 0
+          },
+          {
+            "name": "O003补货量",
+            "row_contains": [
+              "O003",
+              "文件夹"
+            ],
+            "expected": 69.0,
+            "abs_tol": 0
+          },
+          {
+            "name": "D003补货量",
+            "row_contains": [
+              "D003",
+              "垃圾袋"
+            ],
+            "expected": 19.0,
+            "abs_tol": 0
+          }
+        ]
+      }
+    },
+    {
+      "id": "simple-04-q02",
+      "file": "simple/04_产品库存表.xlsx",
+      "question": "各类别的库存总金额（库存数量×单价）是多少？ 请输出结构化结果表（Excel 或 CSV），不要只在报告里写结论；结果表中保留用于核对的关键数值。",
+      "tests": [
+        "计算列",
+        "分组求和",
+        "数值准确率"
+      ],
+      "assertions": {
+        "expected_row_count": {
+          "name": "类别库存金额行数",
+          "count": 4
+        },
+        "expected_values": [
+          {
+            "name": "食品饮料库存总金额",
+            "row_contains": "食品饮料",
+            "expected": 295245.44,
+            "abs_tol": 0.01
+          },
+          {
+            "name": "日用百货库存总金额",
+            "row_contains": "日用百货",
+            "expected": 244285.23,
+            "abs_tol": 0.01
+          },
+          {
+            "name": "办公用品库存总金额",
+            "row_contains": "办公用品",
+            "expected": 166703.51,
+            "abs_tol": 0.01
+          },
+          {
+            "name": "电子产品库存总金额",
+            "row_contains": "电子产品",
+            "expected": 101446.2,
+            "abs_tol": 0.01
+          }
+        ]
+      }
+    },
+    {
+      "id": "simple-05-q01",
+      "file": "simple/05_项目进度跟踪.xlsx",
+      "question": "目前有多少项目延期？延期率是多少？ 请输出结构化结果表（Excel 或 CSV），不要只在报告里写结论；结果表中保留用于核对的关键数值。",
+      "tests": [
+        "状态计数",
+        "比率计算",
+        "数值准确率"
+      ],
+      "assertions": {
+        "expected_values": [
+          {
+            "name": "延期项目数",
+            "row_contains": "延期",
+            "expected": 2.0,
+            "abs_tol": 0
+          },
+          {
+            "name": "延期率",
+            "row_contains": "延期",
+            "expected_any": [
+              0.25,
+              25.0
+            ],
+            "abs_tol": 0.0001
+          }
+        ],
+        "report_must_mention": [
+          {
+            "name": "延期结论",
+            "terms": [
+              "延期",
+              "2"
+            ],
+            "within_chars": 120,
+            "required": false
+          }
+        ]
+      }
+    },
+    {
+      "id": "simple-06-q01",
+      "file": "simple/06_家庭收支记账.xlsx",
+      "question": "每月总收入和总支出各是多少？哪个月结余最多？ 请输出结构化结果表（Excel 或 CSV），不要只在报告里写结论；结果表中保留用于核对的关键数值。",
+      "tests": [
+        "按月分组",
+        "收支差计算",
+        "最大值判断"
+      ],
+      "assertions": {
+        "expected_row_count": {
+          "name": "月度收支行数",
+          "count": 6
+        },
+        "expected_values": [
+          {
+            "name": "结余最多月份收入",
+            "row_contains": "2025-01",
+            "expected": 30000.0,
+            "abs_tol": 0
+          },
+          {
+            "name": "结余最多月份支出",
+            "row_contains": "2025-01",
+            "expected": 4993.0,
+            "abs_tol": 0
+          },
+          {
+            "name": "结余最多月份结余",
+            "row_contains": "2025-01",
+            "expected": 25007.0,
+            "abs_tol": 0
+          }
+        ],
+        "report_must_mention": [
+          {
+            "name": "结余最多月份",
+            "terms": [
+              "2025-01",
+              "结余"
+            ],
+            "within_chars": 120,
+            "required": false
+          }
+        ]
+      }
+    },
+    {
+      "id": "simple-07-q01",
+      "file": "simple/07_客户与订单.xlsx",
+      "question": "排除已取消订单后，每个客户的总订单金额（数量×单价）是多少？谁是大客户？ 请输出结构化结果表（Excel 或 CSV），不要只在报告里写结论；结果表中保留用于核对的关键数值。",
+      "tests": [
+        "跨 sheet 关联",
+        "状态排除",
+        "分组聚合"
+      ],
+      "assertions": {
+        "expected_row_count": {
+          "name": "客户订单金额行数",
+          "count": 6
+        },
+        "expected_values": [
+          {
+            "name": "白云物流有效订单金额",
+            "row_contains": "白云物流",
+            "expected": 586731.0,
+            "abs_tol": 0
+          },
+          {
+            "name": "蓝天科技有效订单金额",
+            "row_contains": "蓝天科技",
+            "expected": 408646.0,
+            "abs_tol": 0
+          },
+          {
+            "name": "银河传媒有效订单金额",
+            "row_contains": "银河传媒",
+            "expected": 356762.0,
+            "abs_tol": 0
+          },
+          {
+            "name": "金桥教育有效订单金额",
+            "row_contains": "金桥教育",
+            "expected": 327236.0,
+            "abs_tol": 0
+          },
+          {
+            "name": "红星建材有效订单金额",
+            "row_contains": "红星建材",
+            "expected": 58386.0,
+            "abs_tol": 0
+          },
+          {
+            "name": "绿叶食品有效订单金额",
+            "row_contains": "绿叶食品",
+            "expected": 19017.0,
+            "abs_tol": 0
+          }
+        ],
+        "report_must_mention": [
+          {
+            "name": "大客户",
+            "terms": [
+              "白云物流",
+              "大客户"
+            ],
+            "within_chars": 120,
+            "required": false
+          }
+        ]
+      }
+    },
+    {
+      "id": "simple-07-q03",
+      "file": "simple/07_客户与订单.xlsx",
+      "question": "订单取消率是多少？请同时输出各客户取消订单数，并说明哪个客户取消最多；如并列最多请全部列出。 请输出结构化结果表（Excel 或 CSV），不要只在报告里写结论；结果表中保留用于核对的关键数值。",
+      "tests": [
+        "状态筛选",
+        "占比计算",
+        "并列最大值处理"
+      ],
+      "assertions": {
+        "expected_row_count": {
+          "name": "有取消订单的客户行数",
+          "count": 5
+        },
+        "expected_values": [
+          {
+            "name": "已取消订单数",
+            "row_contains": "取消",
+            "expected": 8.0,
+            "abs_tol": 0
+          },
+          {
+            "name": "取消率",
+            "row_contains": "取消",
+            "expected_any": [
+              0.32,
+              32.0
+            ],
+            "abs_tol": 0.0001
+          },
+          {
+            "name": "白云物流取消订单数",
+            "row_contains": "白云物流",
+            "expected": 2.0,
+            "abs_tol": 0
+          },
+          {
+            "name": "绿叶食品取消订单数",
+            "row_contains": "绿叶食品",
+            "expected": 2.0,
+            "abs_tol": 0
+          },
+          {
+            "name": "金桥教育取消订单数",
+            "row_contains": "金桥教育",
+            "expected": 2.0,
+            "abs_tol": 0
+          },
+          {
+            "name": "红星建材取消订单数",
+            "row_contains": "红星建材",
+            "expected": 1.0,
+            "abs_tol": 0
+          },
+          {
+            "name": "银河传媒取消订单数",
+            "row_contains": "银河传媒",
+            "expected": 1.0,
+            "abs_tol": 0
+          }
+        ]
+      }
+    },
+    {
+      "id": "simple-08-q01",
+      "file": "simple/08_电商评价数据.xlsx",
+      "question": "各商品的平均评分是多少？哪个商品口碑最好？ 请输出结构化结果表（Excel 或 CSV），不要只在报告里写结论；结果表中保留用于核对的关键数值。",
+      "tests": [
+        "分组均值",
+        "最高值判断",
+        "数值准确率"
+      ],
+      "assertions": {
+        "expected_row_count": {
+          "name": "商品评分行数",
+          "count": 5
+        },
+        "expected_values": [
+          {
+            "name": "USB扩展坞平均评分",
+            "row_contains": "USB扩展坞",
+            "expected": 3.3333,
+            "abs_tol": 0.01
+          },
+          {
+            "name": "显示器支架平均评分",
+            "row_contains": "显示器支架",
+            "expected": 3.125,
+            "abs_tol": 0.01
+          },
+          {
+            "name": "无线鼠标平均评分",
+            "row_contains": "无线鼠标",
+            "expected": 2.75,
+            "abs_tol": 0.01
+          },
+          {
+            "name": "机械键盘平均评分",
+            "row_contains": "机械键盘",
+            "expected": 2.3333,
+            "abs_tol": 0.01
+          },
+          {
+            "name": "降噪耳机平均评分",
+            "row_contains": "降噪耳机",
+            "expected": 1.8,
+            "abs_tol": 0.01
+          }
+        ],
+        "report_must_mention": [
+          {
+            "name": "口碑最好商品",
+            "terms": [
+              "USB扩展坞",
+              "最好"
+            ],
+            "within_chars": 120,
+            "required": false
+          }
+        ]
+      }
+    },
+    {
+      "id": "simple-10-q01",
+      "file": "simple/10_部门费用预算.xlsx",
+      "question": "各部门的预算执行率（实际/预算）如何？谁超支最严重？ 请输出结构化结果表（Excel 或 CSV），不要只在报告里写结论；结果表中保留用于核对的关键数值。",
+      "tests": [
+        "分组汇总",
+        "比率计算",
+        "超支排序"
+      ],
+      "assertions": {
+        "expected_row_count": {
+          "name": "部门预算执行行数",
+          "count": 4
+        },
+        "expected_values": [
+          {
+            "name": "销售部预算",
+            "row_contains": "销售部",
+            "expected": 278.4,
+            "abs_tol": 0.01
+          },
+          {
+            "name": "市场部预算",
+            "row_contains": "市场部",
+            "expected": 206.5,
+            "abs_tol": 0.01
+          },
+          {
+            "name": "行政部预算",
+            "row_contains": "行政部",
+            "expected": 291.9,
+            "abs_tol": 0.01
+          },
+          {
+            "name": "研发部预算",
+            "row_contains": "研发部",
+            "expected": 266.1,
+            "abs_tol": 0.01
+          },
+          {
+            "name": "销售部实际",
+            "row_contains": "销售部",
+            "expected": 301.4,
+            "abs_tol": 0.01
+          },
+          {
+            "name": "市场部实际",
+            "row_contains": "市场部",
+            "expected": 217.8,
+            "abs_tol": 0.01
+          },
+          {
+            "name": "行政部实际",
+            "row_contains": "行政部",
+            "expected": 301.2,
+            "abs_tol": 0.01
+          },
+          {
+            "name": "研发部实际",
+            "row_contains": "研发部",
+            "expected": 272.0,
+            "abs_tol": 0.01
+          },
+          {
+            "name": "销售部超支金额",
+            "row_contains": "销售部",
+            "expected": 23.0,
+            "abs_tol": 0.01
+          },
+          {
+            "name": "销售部执行率",
+            "row_contains": "销售部",
+            "expected_any": [
+              1.0826,
+              108.26
+            ],
+            "abs_tol": 0.01
+          }
+        ],
+        "report_must_mention": [
+          {
+            "name": "超支最严重部门",
+            "terms": [
+              "销售部",
+              "超支"
+            ],
+            "within_chars": 120,
+            "required": false
+          }
+        ]
+      }
+    },
+    {
+      "id": "simple-12-q01",
+      "file": "simple/12_设备巡检记录.xlsx",
+      "question": "各设备的异常次数统计，哪台设备问题最多？ 请输出结构化结果表（Excel 或 CSV），不要只在报告里写结论；结果表中保留用于核对的关键数值。",
+      "tests": [
+        "条件计数",
+        "分组统计",
+        "最高值判断"
+      ],
+      "assertions": {
+        "expected_row_count": {
+          "name": "设备异常统计行数",
+          "count": 5
+        },
+        "expected_values": [
+          {
+            "name": "发电机异常次数",
+            "row_contains": [
+              "D005",
+              "发电机"
+            ],
+            "expected": 9.0,
+            "abs_tol": 0
+          },
+          {
+            "name": "冷却塔异常次数",
+            "row_contains": [
+              "D003",
+              "冷却塔"
+            ],
+            "expected": 8.0,
+            "abs_tol": 0
+          },
+          {
+            "name": "变压器异常次数",
+            "row_contains": [
+              "D004",
+              "变压器"
+            ],
+            "expected": 5.0,
+            "abs_tol": 0
+          },
+          {
+            "name": "空压机A异常次数",
+            "row_contains": [
+              "D001",
+              "空压机A"
+            ],
+            "expected": 3.0,
+            "abs_tol": 0
+          },
+          {
+            "name": "空压机B异常次数",
+            "row_contains": [
+              "D002",
+              "空压机B"
+            ],
+            "expected": 2.0,
+            "abs_tol": 0
+          }
+        ],
+        "report_must_mention": [
+          {
+            "name": "问题最多设备",
+            "terms": [
+              "发电机",
+              "最多"
+            ],
+            "within_chars": 120,
+            "required": false
+          }
+        ]
+      }
+    }
+  ]
+}

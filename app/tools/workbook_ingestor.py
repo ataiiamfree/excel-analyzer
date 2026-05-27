@@ -6,6 +6,7 @@ sheets and rough table candidates so preprocessing has an explicit contract.
 
 from __future__ import annotations
 
+import datetime
 from pathlib import Path
 from typing import Any
 
@@ -198,10 +199,12 @@ class WorkbookIngestor:
                 continue
             text_count = sum(isinstance(value, str) for value in non_empty)
             numeric_count = sum(isinstance(v, (int, float)) for v in non_empty)
+            date_count = sum(isinstance(v, (datetime.date, datetime.datetime)) for v in non_empty)
+            data_value_count = numeric_count + date_count
             is_header_like = (
                 len(non_empty) / width >= 0.4
                 and text_count / len(non_empty) >= 0.6
-                and numeric_count == 0  # Headers don't contain numbers
+                and data_value_count == 0  # Headers don't contain numbers or dates
             )
             if is_header_like:
                 candidates.append(row_idx)

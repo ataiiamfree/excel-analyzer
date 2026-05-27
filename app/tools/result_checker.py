@@ -132,12 +132,21 @@ class ResultChecker:
                 ))
 
         # 检查2: 如果是导出操作，检查输出目录是否有文件
-        export_keywords = ("导出", "export", "保存", "save", "写入")
+        export_keywords = ("导出", "export", "保存", "save", "写入", "输出", "结果表")
         if any(kw in instruction for kw in export_keywords):
+            output_files = getattr(exec_result, "output_files", None)
+            if output_files is None:
+                output_files = getattr(exec_result, "files", [])
+            if not output_files:
+                checks.append(CheckItem(
+                    "export_has_output", "failed",
+                    "指令要求导出/保存/写入，但本步骤没有在 output/ 目录产出文件；请把用户可见结果写入 output/。",
+                ))
+                return checks
             output_dir = Path(workspace.path) / "output"
             if output_dir.exists() and not any(output_dir.iterdir()):
                 checks.append(CheckItem(
-                    "export_has_output", "warning",
+                    "export_has_output", "failed",
                     "指令要求导出但 output/ 目录为空",
                 ))
 

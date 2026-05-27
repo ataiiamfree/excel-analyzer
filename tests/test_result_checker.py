@@ -91,7 +91,7 @@ def test_output_files_readable(tmp_path):
 
 
 def test_basic_invariants_export_warning(tmp_path):
-    """导出指令但 output/ 为空时应发出警告。"""
+    """导出指令但本步骤无 output 产物时应失败，触发自动修复。"""
     output_dir = tmp_path / "output"
     output_dir.mkdir()
 
@@ -102,6 +102,24 @@ def test_basic_invariants_export_warning(tmp_path):
         _make_context(),
         SimpleNamespace(path=str(tmp_path), list_files=lambda: []),
     )
-    warnings = [c for c in result.checks if c.name == "export_has_output"]
-    assert len(warnings) == 1
-    assert warnings[0].status == "warning"
+    failures = [c for c in result.checks if c.name == "export_has_output"]
+    assert len(failures) == 1
+    assert failures[0].status == "failed"
+    assert result.status == "failed"
+
+
+def test_basic_invariants_export_passes_with_current_step_output(tmp_path):
+    """导出指令存在当前步骤产物时不应误报。"""
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+    (output_dir / "data.csv").write_text("a,b\n1,2\n")
+
+    checker = ResultChecker()
+    result = checker.validate(
+        _make_step(instruction="导出明细数据到 Excel"),
+        _make_result(output_files=["output/data.csv"]),
+        _make_context(),
+        SimpleNamespace(path=str(tmp_path), list_files=lambda: []),
+    )
+    assert not any(c.name == "export_has_output" for c in result.checks)
+    assert result.status == "passed"
