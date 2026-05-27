@@ -40,7 +40,11 @@ class PromptAssembler:
         check_report: str | None = None,
     ) -> str:
         parts = [
-            "代码执行或结果校验失败，请修正。只输出完整 Python 脚本，不要解释。",
+            "代码执行或结果校验失败，请修正。只输出完整 Python 脚本，不要解释。\n"
+            "重要：如果报错是 ModuleNotFoundError（模块未安装），你必须改用已安装的库来实现同样的功能，"
+            "绝对不要再次导入报错的模块。"
+            "可用库：pandas, numpy, matplotlib, openpyxl, seaborn, scipy, pathlib, json, re, collections。"
+            "代码中的字符串请使用英文引号，不要使用中文引号。",
             f"## 当前步骤\n{step.description}\n{step.instruction}",
             f"## 数据概况\n{self.format_profile_for_prompt(context.data_profile)}",
             f"## 可用产物\n{self._format_json(context.artifact_manifest)}",
@@ -288,7 +292,11 @@ class PromptAssembler:
         if tool == "python":
             return (
                 "你是 Python 数据分析专家。读取 normalized parquet/xlsx，"
-                "只输出完整、可直接执行的 Python 脚本，不要输出 JSON 计划、markdown 或解释。"
+                "只输出完整、可直接执行的 Python 脚本，不要输出 JSON 计划、markdown 或解释。\n"
+                "可用的 Python 库：pandas, numpy, matplotlib, openpyxl, seaborn, scipy, pathlib, json, re, collections, itertools。"
+                "不可用的库：plotly, sklearn, statsmodels, jieba, wordcloud, xlsxwriter。"
+                "如果需要这些库的功能，请用可用库替代（如用 numpy 代替 sklearn 做简单统计）。\n"
+                "代码中的字符串请使用英文引号，不要使用中文引号（如 \u201c\u201d），否则会导致语法错误。\n"
                 "必须优先使用数据概况中 tables[].path 指向的正式数据文件，"
                 "不要扫描 normalized 目录，不要读取 *_preview.xlsx。"
                 "写代码前必须根据数据概况里的 columns 确认列名；"
