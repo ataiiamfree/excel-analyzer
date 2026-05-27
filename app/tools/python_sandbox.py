@@ -136,10 +136,12 @@ class PythonSandbox:
             for key, value in os.environ.items()
             if key in {"PATH", "HOME", "LANG", "LC_ALL", "PYTHONPATH"}
         }
+        mpl_config_dir = str(Path(__file__).resolve().parent / "mpl_config")
         env.update(
             {
                 "PYTHONPATH": str(workdir),
                 "MPLBACKEND": "Agg",
+                "MPLCONFIGDIR": mpl_config_dir,
                 "PYTHONUNBUFFERED": "1",
             }
         )

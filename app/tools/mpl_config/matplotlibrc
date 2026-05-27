@@ -1,0 +1,4 @@
+## matplotlib 中文字体配置（沙箱脚本自动加载）
+font.family: sans-serif
+font.sans-serif: STHeiti, Heiti TC, Arial Unicode MS, PingFang HK, Songti SC, SimHei, Microsoft YaHei, DejaVu Sans
+axes.unicode_minus: False
