@@ -1250,6 +1250,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--sandbox-timeout", type=int, help="Override sandbox timeout seconds.")
     parser.add_argument("--max-repair-attempts", type=int, help="Override max repair attempts.")
     parser.add_argument("--fail-fast", action="store_true", help="Stop after the first failing case.")
+    parser.add_argument("--retries", type=int, default=2, help="Max attempts per case on transient (network) errors.")
     parser.add_argument("--log-level", default=os.getenv("LOG_LEVEL", "INFO"), help="Python logging level.")
     return parser
 
@@ -1267,6 +1268,28 @@ def _configure_logging(run_dir: Path | None, level_name: str) -> None:
         handlers=handlers,
         force=True,
     )
+
+
+_TRANSIENT_ERROR_PATTERNS = (
+    "nodename nor servname provided",
+    "Name or service not known",
+    "Temporary failure in name resolution",
+    "Connection refused",
+    "Connection reset by peer",
+    "Connection timed out",
+    "TimeoutError",
+    "HTTPSConnectionPool",
+    "RemoteDisconnected",
+    "status code: 500",
+    "status code: 502",
+    "status code: 503",
+    "status code: 529",
+)
+
+
+def _is_transient_error(exception_text: str) -> bool:
+    """Check if an exception looks like a transient network/server error."""
+    return any(pattern in exception_text for pattern in _TRANSIENT_ERROR_PATTERNS)
 
 
 async def async_main(args: argparse.Namespace) -> int:
@@ -1293,31 +1316,41 @@ async def async_main(args: argparse.Namespace) -> int:
     LOGGER.info("Selected %d cases from %d loaded cases", len(cases), len(all_cases))
     _write_json(run_dir / "cases.json", [case.to_dict() for case in cases])
 
+    max_retries = getattr(args, "retries", 1) or 1
     results: list[dict[str, Any]] = []
     for index, case in enumerate(cases, start=1):
         LOGGER.info("Running case %d/%d: %s", index, len(cases), case.id)
-        try:
-            result = await run_case(case, run_dir, args)
-        except Exception:
-            error = traceback.format_exc()
-            LOGGER.exception("Case bootstrap failed: %s", case.id)
-            result = {
-                "case": case.to_dict(),
-                "passed": False,
-                "duration_seconds": 0,
-                "workspace": None,
-                "task_ids": [],
-                "state": {},
-                "output_files": [],
-                "assertions": [
-                    AssertionOutcome(
-                        name="case_bootstrap",
-                        passed=False,
-                        detail=error[:1000],
-                    ).to_dict()
-                ],
-                "exception": error,
-            }
+        result: dict[str, Any] | None = None
+        for attempt in range(1, max_retries + 1):
+            try:
+                result = await run_case(case, run_dir, args)
+            except Exception:
+                error = traceback.format_exc()
+                LOGGER.exception("Case bootstrap failed: %s", case.id)
+                result = {
+                    "case": case.to_dict(),
+                    "passed": False,
+                    "duration_seconds": 0,
+                    "workspace": None,
+                    "task_ids": [],
+                    "state": {},
+                    "output_files": [],
+                    "assertions": [
+                        AssertionOutcome(
+                            name="case_bootstrap",
+                            passed=False,
+                            detail=error[:1000],
+                        ).to_dict()
+                    ],
+                    "exception": error,
+                }
+            if result.get("passed") or attempt >= max_retries:
+                break
+            # Retry only on network / transient errors
+            exc_text = result.get("exception") or ""
+            if not _is_transient_error(exc_text):
+                break
+            LOGGER.warning("[%s] transient error on attempt %d/%d, retrying...", case.id, attempt, max_retries)
         results.append(result)
         write_summary(run_dir, results)
         if args.fail_fast and not result.get("passed"):
