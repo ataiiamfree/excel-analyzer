@@ -60,6 +60,9 @@ class StepResult:
 class TaskResult:
     report: str
     files: list[str]
+    failed: bool = False
+    failed_step_description: str = ""
+    error_summary: str = ""
 
 
 Executor = Callable[[Step, TaskContext, Any], Awaitable[StepResult]]
@@ -158,11 +161,12 @@ class Orchestrator:
         self._on_step_end = on_step_end
         result = await self.run_plan(plan, context, workspace)
 
-        # 更新 session
+        # 更新 session（含结果摘要，供追问使用）
         session.update_after_task(
             task_id=workspace.task_id,
             findings=context.key_findings,
             summary_text=query,
+            result_summary=result.report[:500] if result.report else "",
         )
 
         return result
@@ -200,6 +204,9 @@ class Orchestrator:
             "}\n```\n"
             "tool 只能是 python 或 knowledge。\n"
             "确保 steps 按执行顺序排列，depends_on 引用已有 step id。\n"
+            "不要在 instruction 中硬编码 normalized 文件的绝对路径；只描述要使用哪张表和哪些字段，"
+            "代码生成阶段会根据数据概况里的 tables[].path 读取正式数据文件。\n"
+            "如果用户要求导出、保存、输出结果表，计划必须明确要求把用户可见产物写入 output/ 目录。\n"
         )
 
         try:
@@ -326,11 +333,13 @@ class Orchestrator:
 
             plan.mark_running(step.id)
             workspace.write_state(status="executing", current_step=step.id)
-            logger.info("▶ 执行 Step %s [%s]: %s", step.id, step.tool, step.description)
+            step_index = plan.steps.index(step) + 1
+            total_steps = len(plan.steps)
+            logger.info("▶ 执行 Step %s [%d/%d] [%s]: %s", step.id, step_index, total_steps, step.tool, step.description)
 
             on_start = getattr(self, "_on_step_start", None)
             if on_start:
-                await on_start(step)
+                await on_start(step, step_index, total_steps)
 
             result = await self._execute_step(step, context, workspace)
             check = self.tools.checker.validate(step, result, context, workspace)
@@ -352,7 +361,14 @@ class Orchestrator:
                     current_step=step.id,
                     error=result.error or check.to_prompt_text(),
                 )
-                return TaskResult(report="任务失败，已停止在当前步骤", files=[])
+                error_detail = result.error or check.to_prompt_text()
+                return TaskResult(
+                    report="任务失败，已停止在当前步骤",
+                    files=[],
+                    failed=True,
+                    failed_step_description=step.description,
+                    error_summary=error_detail[:300],
+                )
 
             context.quality_checks.append(check)
             context.add_step_summary(step.id, result.stdout, step.description)

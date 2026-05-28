@@ -60,17 +60,24 @@ class Session:
         task_id: str,
         findings: list[str] | None = None,
         summary_text: str = "",
+        result_summary: str = "",
     ) -> None:
         """Update session state after a completed analysis task."""
         self.tasks.append(task_id)
         if findings:
             self.accumulated_findings.extend(findings)
 
-        if summary_text:
+        # Combine user query and result summary for richer follow-up context
+        entry = summary_text
+        if result_summary:
+            trimmed = result_summary[:500]
+            entry = f"问题: {summary_text}\n结果摘要: {trimmed}" if summary_text else trimmed
+
+        if entry:
             if self.conversation_summary:
-                self.conversation_summary += "\n---\n" + summary_text
+                self.conversation_summary += "\n---\n" + entry
             else:
-                self.conversation_summary = summary_text
+                self.conversation_summary = entry
 
         # Trim summary to keep context bounded
         if len(self.conversation_summary) > self._SUMMARY_MAX_CHARS:

@@ -538,7 +538,7 @@ def test_step_callbacks_called():
     tools = SimpleNamespace(checker=FakeChecker())
     orch = CallbackOrchestrator(llm_client=None, tools=tools, config=_make_config())
 
-    async def on_start(step):
+    async def on_start(step, step_index=0, total_steps=0):
         started.append(step.id)
 
     async def on_end(step, result):
