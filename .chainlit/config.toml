@@ -6,26 +6,52 @@ enable_telemetry = false
 prompt_playground = false
 multi_modal = true
 
+[features.spontaneous_file_upload]
+enabled = true
+accept = [
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "application/vnd.ms-excel.sheet.macroEnabled.12",
+]
+max_files = 1
+max_size_mb = 100
+
 [UI]
 name = "ChatExcel"
 description = "上传 Excel，用自然语言分析数据、生成图表"
 default_theme = "light"
+language = "zh-CN"
+layout = "wide"
+default_sidebar_state = "open"
+confirm_new_chat = false
+cot = "tool_call"
+alert_style = "modern"
+custom_css = "/public/chat_excel.css"
+custom_js = "/public/chat_excel.js"
+logo_file_url = "/public/chat_excel_logo.svg"
+default_avatar_file_url = "/public/chat_excel_logo.svg"
+avatar_size = 28
 
 [UI.theme]
     [UI.theme.light]
-        background = "#FFFFFF"
-        paper = "#F8FAFC"
+        background = "#F5F8FF"
+        paper = "#FFFFFF"
+        [UI.theme.light.text]
+            primary = "#0F172A"
+            secondary = "#64748B"
         [UI.theme.light.primary]
             main = "#2563EB"
             dark = "#1D4ED8"
-            light = "#DBEAFE"
+            light = "#EFF6FF"
     [UI.theme.dark]
-        background = "#1E293B"
-        paper = "#0F172A"
+        background = "#0F172A"
+        paper = "#111827"
+        [UI.theme.dark.text]
+            primary = "#F8FAFC"
+            secondary = "#CBD5E1"
         [UI.theme.dark.primary]
-            main = "#3B82F6"
-            dark = "#2563EB"
-            light = "#1E3A5F"
+            main = "#60A5FA"
+            dark = "#3B82F6"
+            light = "#1E3A8A"
 
 [meta]
 generated_by = "2.11.1"

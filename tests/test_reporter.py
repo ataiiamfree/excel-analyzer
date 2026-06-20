@@ -16,7 +16,12 @@ class FakeLLM:
     def __init__(self):
         self.calls: list[str] = []
 
-    async def call(self, prompt: str, max_tokens: int = 2000) -> str:
+    async def call(
+        self,
+        prompt: str,
+        max_tokens: int = 2000,
+        reasoning_callback=None,
+    ) -> str:
         self.calls.append(prompt)
         # Extract chapter title from prompt to make assertions possible
         if "第1章" in prompt:
@@ -26,6 +31,13 @@ class FakeLLM:
         if "第3章" in prompt:
             return "综合来看，采购效率有待提升。建议优化审批流程，预计可缩短 15% 时长。"
         return "报告章节内容。"
+
+
+class FakeStreamingLLM(FakeLLM):
+    async def stream(self, prompt: str, max_tokens: int = 2000, reasoning_callback=None):
+        self.calls.append(prompt)
+        for token in ("流式", "章节", "内容"):
+            yield token
 
 
 class FakeWorkspace:
@@ -110,6 +122,26 @@ def test_generate_multi_section_report():
     # Attachments
     assert "## 附件" in report
     assert "采购分析.xlsx" in report
+
+
+def test_generate_streams_report_sections():
+    llm = FakeStreamingLLM()
+    reporter = Reporter(llm_client=llm)
+    ctx = _make_context(with_outline=True)
+    workspace = FakeWorkspace()
+    streamed: list[str] = []
+
+    async def on_token(token: str):
+        streamed.append(token)
+
+    report = asyncio.run(reporter.generate(ctx, workspace, stream_callback=on_token))
+
+    assert len(llm.calls) == 3
+    assert "# 分析报告" in "".join(streamed)
+    assert "## 1. 采购总览" in "".join(streamed)
+    assert "流式章节内容" in "".join(streamed)
+    assert "流式章节内容" in report
+    assert "## 附件" in report
 
 
 def test_chapter_receives_prev_ending():

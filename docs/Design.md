@@ -30,6 +30,10 @@
 - **TaskContext + Artifact Manifest 是信息桥梁**：步骤间通过结构化摘要、文件产物和 lineage 传递信息，有严格大小预算
 - **单次调用 token 有硬上限**：任何一次 LLM 调用的输入不超过预算上限（standard: 4K / generous: 16K，见第六章 Token 预算全景）
 - **Adaptive Plan-Execute 编排**：先粗略规划全局，每步执行后根据实际结果动态细化下一步（详见 Implementation-Plan.md 第〇章）
+- **用户可见内容与思考分离**：最终报告章节和简短结论通过 Chainlit 流式展示；DeepSeek 返回的 `reasoning_content` 只通过独立回调展示为“DeepSeek 思考”，不混入报告正文、Python 代码或结构化 JSON 输出
+- **Plan-Execute 过程可见**：规划完成后在 UI 展示执行计划；每个 Execute 步骤用可展开步骤展示输入、stdout 摘要、脚本路径和产物
+- **过程与结果视觉分层**：Chainlit 消息写入隐藏 UI 类型标记、`metadata/tags`，前端只读取标记做样式分层，不扫描可见中文文本；思考内容使用更小、更灰的辅助样式，最终结果保持正式答案样式
+- **结果型任务单脚本优先**：普通 Excel 分析、导出、画图任务默认合并为一个 Python 步骤，避免多步重复生成大段代码
 - **原始文件不可变**：永远保留 raw workbook，所有清洗、拆表、派生字段都写入新的 normalized/artifact 文件
 - **结果先校验再报告**：代码跑通不等于分析正确，关键步骤必须经过结构化结果检查
 - **可复现优先**：每个 task 保存 profile、plan、生成代码、执行日志、产物清单，方便单步重跑
@@ -1291,7 +1295,14 @@ class Reporter:
                 prev_ending=sections[-1][-200:] if sections else ""
             )
 
-            section_text = await self.llm.call(prompt, max_tokens=3000)
+            # 有 Chainlit 回调时使用 llm.stream，把章节内容逐块推给前端；
+            # DeepSeek reasoning_content 通过单独回调显示为“DeepSeek 思考”。
+            # 无回调时仍可使用普通 call，便于测试和批处理复用。
+            chunks = []
+            async for token in self.llm.stream(prompt, max_tokens=3000):
+                await stream_callback(token)
+                chunks.append(token)
+            section_text = "".join(chunks)
             sections.append(section_text)
 
         return self._assemble_full_report(sections, context, workspace)
@@ -1608,11 +1619,12 @@ class LLMClient:
             data = resp.json()
             message = data["choices"][0]["message"]
 
-            # DeepSeek V4 Pro 等推理模型可能把结果放在 reasoning_content 中
-            # 优先取 content，为空时 fallback 到 reasoning_content
+            # DeepSeek 推理模型可能额外返回 reasoning_content。
+            # reasoning_content 只用于过程展示，不能当作最终答案或可执行代码。
             content = message.get("content") or ""
-            if not content.strip() and message.get("reasoning_content"):
-                content = message["reasoning_content"]
+            if not content.strip():
+                reasoning_len = len(message.get("reasoning_content") or "")
+                raise LLMError(f"LLM 响应缺少 content: reasoning_chars={reasoning_len}")
 
             return content
 ```
@@ -1640,7 +1652,10 @@ async def start():
     """会话开始：让用户上传 Excel"""
     files = await cl.AskFileMessage(
         content="请上传 Excel 文件",
-        accept=["application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"],
+        accept=[
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "application/vnd.ms-excel.sheet.macroEnabled.12",
+        ],
         max_size_mb=100,
     ).send()
     # 保存到 session
@@ -1674,8 +1689,35 @@ async def main(message: cl.Message):
             # ... execute ...
             step.output = result.summary
 
-    # 发送报告
-    await cl.Message(content=report_markdown).send()
+    # 展示执行计划和每个 Execute 步骤；步骤完成后显示 stdout 摘要、脚本路径和产物。
+    # 不同消息类型会写入隐藏 marker + metadata/tags，并由 public/chat_excel.js + CSS 做视觉分层。
+    await cl.Message(
+        content=ui_content("plan", format_plan(plan)),
+        metadata={"cx_kind": "plan"},
+        tags=["cx-plan"],
+    ).send()
+    for step in plan.steps:
+        async with cl.Step(
+            name=step.description,
+            type="tool",
+            metadata={"cx_kind": "execute"},
+            tags=["cx-execute"],
+        ) as step_panel:
+            step_panel.input = step.instruction
+            result = await run_step(step)
+            step_panel.output = ui_content("execute", summarize_step_result(result))
+
+    # 流式发送报告文本；DeepSeek 思考内容在独立消息中展示。
+    # 附件和表格预览等产物仍在任务结束后单独发送。
+    report_msg = cl.Message(
+        content=ui_content("result", ""),
+        metadata={"cx_kind": "result"},
+        tags=["cx-result"],
+    )
+    await report_msg.send()
+    async for token in report_tokens:
+        await report_msg.stream_token(token)
+    await report_msg.update()
 
     # 发送图表和文件
     elements = []

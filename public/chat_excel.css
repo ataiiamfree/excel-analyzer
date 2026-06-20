@@ -1,0 +1,310 @@
+:root {
+  --cx-bg: #f6f8fb;
+  --cx-panel: #ffffff;
+  --cx-ink: #111827;
+  --cx-muted: #64748b;
+  --cx-muted-strong: #475569;
+  --cx-border: #d8e1ee;
+  --cx-border-strong: #bdcce0;
+  --cx-accent: #2563eb;
+  --cx-accent-strong: #1d4ed8;
+  --cx-accent-soft: #eff6ff;
+  --cx-success: #0f766e;
+  --cx-success-soft: #f0fdfa;
+  --cx-warning-soft: #fff7ed;
+  --cx-shadow-soft: 0 8px 22px rgba(15, 23, 42, 0.08);
+}
+
+html.cx-enhanced body {
+  background: var(--cx-bg) !important;
+  color: var(--cx-ink);
+  font-feature-settings: "tnum";
+}
+
+html.cx-enhanced main,
+html.cx-enhanced [role="main"] {
+  background: transparent !important;
+}
+
+html.cx-enhanced button,
+html.cx-enhanced [class*="message"],
+html.cx-enhanced [class*="markdown"] h1,
+html.cx-enhanced [class*="markdown"] h2,
+html.cx-enhanced [class*="markdown"] h3 {
+  letter-spacing: 0;
+}
+
+html.cx-enhanced .cx-ui-marker {
+  display: none !important;
+}
+
+html.cx-enhanced button[class*="MuiButton-contained"],
+html.cx-enhanced button[class*="MuiFab-root"],
+html.cx-enhanced button.bg-primary,
+html.cx-enhanced [class*="bg-primary"] {
+  background: var(--cx-accent) !important;
+  color: #fff !important;
+}
+
+html.cx-enhanced button[class*="MuiButton-contained"]:hover,
+html.cx-enhanced button[class*="MuiFab-root"]:hover,
+html.cx-enhanced button.bg-primary:hover {
+  background: var(--cx-accent-strong) !important;
+}
+
+html.cx-enhanced textarea,
+html.cx-enhanced input[type="text"],
+html.cx-enhanced input:not([type]),
+html.cx-enhanced [contenteditable="true"] {
+  border-radius: 8px !important;
+  border-color: var(--cx-border-strong) !important;
+  background: var(--cx-panel) !important;
+  box-shadow: 0 8px 26px rgba(15, 23, 42, 0.06) !important;
+}
+
+html.cx-enhanced textarea:focus,
+html.cx-enhanced input[type="text"]:focus,
+html.cx-enhanced input:not([type]):focus,
+html.cx-enhanced [contenteditable="true"]:focus {
+  border-color: var(--cx-accent) !important;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.14) !important;
+}
+
+html.cx-enhanced [data-testid*="file" i],
+html.cx-enhanced [class*="file" i] {
+  border-radius: 8px;
+}
+
+html.cx-enhanced .MuiPaper-root,
+html.cx-enhanced .MuiAlert-root {
+  border-radius: 8px !important;
+  border-color: var(--cx-border) !important;
+}
+
+html.cx-enhanced .ai-message {
+  transition: opacity 0.16s ease, background 0.16s ease;
+}
+
+html.cx-enhanced .ai-message.cx-msg-reasoning .message-content {
+  max-width: 880px;
+  border-left: 3px solid #cbd5e1;
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: #f8fafc;
+}
+
+html.cx-enhanced .ai-message.cx-msg-reasoning [role="article"],
+html.cx-enhanced .ai-message.cx-msg-reasoning [class*="prose"],
+html.cx-enhanced .ai-message.cx-msg-reasoning li,
+html.cx-enhanced .ai-message.cx-msg-reasoning p {
+  color: var(--cx-muted) !important;
+  font-size: 12px !important;
+  line-height: 1.58 !important;
+}
+
+html.cx-enhanced .ai-message.cx-msg-reasoning strong {
+  color: var(--cx-muted-strong) !important;
+  font-size: 12px !important;
+}
+
+html.cx-enhanced .ai-message.cx-msg-reasoning ul,
+html.cx-enhanced .ai-message.cx-msg-reasoning ol {
+  margin-top: 4px !important;
+  margin-bottom: 4px !important;
+}
+
+html.cx-enhanced .ai-message.cx-msg-progress .message-content {
+  max-width: 760px;
+  border: 1px solid var(--cx-border);
+  border-radius: 8px;
+  padding: 8px 11px;
+  background: var(--cx-panel);
+}
+
+html.cx-enhanced .ai-message.cx-msg-progress [role="article"] {
+  color: var(--cx-muted-strong) !important;
+  font-size: 13px !important;
+  line-height: 1.5 !important;
+}
+
+html.cx-enhanced .ai-message.cx-msg-plan .message-content {
+  max-width: 820px;
+  border: 1px solid #bfdbfe;
+  border-left: 3px solid var(--cx-accent);
+  border-radius: 8px;
+  padding: 10px 13px;
+  background: var(--cx-accent-soft);
+}
+
+html.cx-enhanced .ai-message.cx-msg-plan [role="article"],
+html.cx-enhanced .ai-message.cx-msg-plan li {
+  color: #334155 !important;
+  font-size: 13px !important;
+  line-height: 1.55 !important;
+}
+
+html.cx-enhanced .ai-message.cx-msg-plan strong {
+  color: var(--cx-accent-strong) !important;
+}
+
+html.cx-enhanced .ai-message.cx-msg-execute .message-content,
+html.cx-enhanced [data-step-type].cx-msg-execute,
+html.cx-enhanced [data-testid*="step" i].cx-msg-execute {
+  max-width: 820px;
+  border: 1px solid #d6e2f2;
+  border-left: 3px solid #64748b;
+  border-radius: 8px !important;
+  padding: 10px 13px;
+  background: #f8fafc;
+}
+
+html.cx-enhanced .message-content button[aria-expanded] {
+  min-height: 34px;
+  border: 1px solid var(--cx-border) !important;
+  border-radius: 8px !important;
+  background: #f8fafc !important;
+  color: var(--cx-muted-strong) !important;
+  font-size: 12px !important;
+  font-weight: 700 !important;
+}
+
+html.cx-enhanced .ai-message.cx-msg-result .message-content {
+  max-width: 900px;
+  border-left: 4px solid var(--cx-accent);
+  padding-left: 16px;
+}
+
+html.cx-enhanced .ai-message.cx-msg-result [class*="markdown"] h1,
+html.cx-enhanced .ai-message.cx-msg-result h1 {
+  color: var(--cx-ink) !important;
+  font-size: 24px !important;
+  line-height: 1.25 !important;
+}
+
+html.cx-enhanced .ai-message.cx-msg-result [class*="markdown"] h2,
+html.cx-enhanced .ai-message.cx-msg-result h2 {
+  color: #1e293b !important;
+  font-size: 17px !important;
+  line-height: 1.35 !important;
+}
+
+html.cx-enhanced .ai-message.cx-msg-artifact .message-content,
+html.cx-enhanced .ai-message.cx-msg-preview .message-content {
+  max-width: 920px;
+  border: 1px solid #cde8e4;
+  border-left: 3px solid var(--cx-success);
+  border-radius: 8px;
+  padding: 10px 13px;
+  background: var(--cx-success-soft);
+}
+
+html.cx-enhanced .ai-message.cx-msg-artifact [role="article"],
+html.cx-enhanced .ai-message.cx-msg-preview [role="article"] {
+  color: #134e4a !important;
+  font-size: 13px !important;
+  line-height: 1.55 !important;
+}
+
+html.cx-enhanced [class*="markdown"] h1,
+html.cx-enhanced [class*="markdown"] h2,
+html.cx-enhanced [class*="markdown"] h3 {
+  color: var(--cx-ink);
+}
+
+html.cx-enhanced [class*="markdown"] hr {
+  border-color: var(--cx-border);
+}
+
+html.cx-enhanced [class*="markdown"] table,
+html.cx-enhanced table {
+  width: 100%;
+  border-collapse: separate !important;
+  border-spacing: 0;
+  overflow: hidden;
+  border: 1px solid var(--cx-border);
+  border-radius: 8px;
+  background: var(--cx-panel);
+}
+
+html.cx-enhanced [class*="markdown"] th,
+html.cx-enhanced [class*="markdown"] td,
+html.cx-enhanced table th,
+html.cx-enhanced table td {
+  min-width: 92px;
+  padding: 10px 12px !important;
+  border-bottom: 1px solid var(--cx-border);
+  color: #1e293b;
+  font-size: 13px;
+  line-height: 1.45;
+  text-align: left;
+  vertical-align: middle;
+  white-space: nowrap;
+  word-break: keep-all;
+}
+
+html.cx-enhanced [class*="markdown"] th,
+html.cx-enhanced table th {
+  background: #eef5ff;
+  color: #334155;
+  font-weight: 800;
+}
+
+html.cx-enhanced [class*="markdown"] tr:last-child td,
+html.cx-enhanced table tr:last-child td {
+  border-bottom: 0;
+}
+
+html.cx-enhanced [class*="dataframe" i],
+html.cx-enhanced [data-testid*="dataframe" i],
+html.cx-enhanced [class*="table" i] {
+  max-width: 100% !important;
+  overflow-x: auto !important;
+}
+
+html.cx-enhanced [class*="MuiDataGrid-root"] {
+  border-color: var(--cx-border) !important;
+  border-radius: 8px !important;
+  background: var(--cx-panel) !important;
+  box-shadow: var(--cx-shadow-soft);
+}
+
+html.cx-enhanced [class*="MuiDataGrid-columnHeaders"],
+html.cx-enhanced [class*="MuiDataGrid-columnHeader"] {
+  background: #eef5ff !important;
+  color: #334155 !important;
+  font-weight: 800 !important;
+}
+
+html.cx-enhanced [class*="MuiDataGrid-cell"] {
+  color: #1e293b !important;
+  font-size: 13px !important;
+  white-space: nowrap !important;
+}
+
+html.cx-enhanced a {
+  color: var(--cx-accent-strong);
+}
+
+html.cx-enhanced ::selection {
+  background: rgba(37, 99, 235, 0.18);
+}
+
+@media (max-width: 720px) {
+  html.cx-enhanced .ai-message.cx-msg-reasoning .message-content,
+  html.cx-enhanced .ai-message.cx-msg-progress .message-content,
+  html.cx-enhanced .ai-message.cx-msg-plan .message-content,
+  html.cx-enhanced .ai-message.cx-msg-execute .message-content,
+  html.cx-enhanced .ai-message.cx-msg-result .message-content,
+  html.cx-enhanced .ai-message.cx-msg-artifact .message-content,
+  html.cx-enhanced .ai-message.cx-msg-preview .message-content {
+    max-width: 100%;
+  }
+
+  html.cx-enhanced [class*="markdown"] th,
+  html.cx-enhanced [class*="markdown"] td,
+  html.cx-enhanced table th,
+  html.cx-enhanced table td {
+    min-width: 84px;
+    padding: 8px 10px !important;
+  }
+}

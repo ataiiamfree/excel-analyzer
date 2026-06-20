@@ -9,10 +9,12 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from typing import Any
+from collections.abc import Awaitable, Callable
 
 from app.context.task_context import TaskContext
 
 _SYSTEM_PROMPT_PATH = Path(__file__).resolve().parent.parent / "prompts" / "system_reporter.md"
+TokenCallback = Callable[[str], Awaitable[None]]
 
 
 class Reporter:
@@ -20,13 +22,23 @@ class Reporter:
         self.llm = llm_client
         self._system_prompt = self._load_system_prompt()
 
-    async def generate(self, context: TaskContext, workspace: Any) -> str:
+    async def generate(
+        self,
+        context: TaskContext,
+        workspace: Any,
+        *,
+        stream_callback: TokenCallback | None = None,
+        reasoning_callback: TokenCallback | None = None,
+    ) -> str:
         """Generate the full report.  Returns Markdown text."""
         outline = (context.plan.report_outline if context.plan else None) or []
         if not outline:
             return self._assemble_simple_response(context, workspace)
 
         sections: list[str] = []
+        if stream_callback:
+            await self._emit(stream_callback, self._build_report_preamble(outline, context))
+
         for index, chapter in enumerate(outline):
             relevant_data = self._gather_data(chapter, context)
             prev_ending = sections[-1][-200:] if sections else ""
@@ -38,10 +50,46 @@ class Reporter:
                 data=relevant_data,
                 prev_ending=prev_ending,
             )
-            section_text = await self.llm.call(prompt, max_tokens=3000)
+            if stream_callback:
+                await self._emit(
+                    stream_callback,
+                    self._build_section_heading(index + 1, chapter),
+                )
+            section_text = await self._generate_section(prompt, stream_callback, reasoning_callback)
             sections.append(section_text)
 
         return self._assemble_full_report(sections, outline, context, workspace)
+
+    async def _generate_section(
+        self,
+        prompt: str,
+        stream_callback: TokenCallback | None,
+        reasoning_callback: TokenCallback | None,
+    ) -> str:
+        stream = getattr(self.llm, "stream", None)
+        if stream_callback and callable(stream):
+            chunks: list[str] = []
+            async for token in stream(
+                prompt,
+                max_tokens=3000,
+                reasoning_callback=reasoning_callback,
+            ):
+                chunks.append(token)
+                await self._emit(stream_callback, token)
+            await self._emit(stream_callback, "\n")
+            return "".join(chunks)
+
+        section_text = await self.llm.call(
+            prompt,
+            max_tokens=3000,
+            reasoning_callback=reasoning_callback,
+        )
+        await self._emit(stream_callback, section_text + "\n")
+        return section_text
+
+    async def _emit(self, callback: TokenCallback | None, text: str) -> None:
+        if callback and text:
+            await callback(text)
 
     # ------------------------------------------------------------------
     # Prompt construction
@@ -125,19 +173,11 @@ class Reporter:
         context: TaskContext,
         workspace: Any,
     ) -> str:
-        parts: list[str] = []
-
-        # Title
-        parts.append(f"# 分析报告\n\n> 需求：{context.user_query}\n")
-
-        # Table of contents
-        toc_lines = [f"{i+1}. {ch.get('title', '未命名')}" for i, ch in enumerate(outline)]
-        parts.append("## 目录\n" + "\n".join(toc_lines) + "\n")
+        parts: list[str] = [self._build_report_preamble(outline, context)]
 
         # Sections
         for i, (chapter, text) in enumerate(zip(outline, sections)):
-            title = chapter.get("title", "未命名")
-            parts.append(f"## {i+1}. {title}\n\n{text.strip()}\n")
+            parts.append(f"{self._build_section_heading(i + 1, chapter)}{text.strip()}\n")
 
         # Inline chart references
         artifacts = context.artifact_manifest or []
@@ -159,23 +199,72 @@ class Reporter:
 
         return "\n".join(parts)
 
+    def _build_report_preamble(self, outline: list[dict[str, Any]], context: TaskContext) -> str:
+        toc_lines = [f"{i+1}. {ch.get('title', '未命名')}" for i, ch in enumerate(outline)]
+        return f"# 分析报告\n\n> 需求：{context.user_query}\n\n## 目录\n" + "\n".join(toc_lines) + "\n\n"
+
+    def _build_section_heading(self, index: int, chapter: dict[str, Any]) -> str:
+        title = chapter.get("title", "未命名")
+        return f"## {index}. {title}\n\n"
+
     def _assemble_simple_response(self, context: TaskContext, workspace: Any) -> str:
-        """Fallback when no report_outline is defined."""
-        parts = [f"# 分析结果\n\n> 需求：{context.user_query}\n"]
+        """Concise result-first response for non-report tasks."""
+        parts = ["# 分析结果"]
 
-        for step_id, summary in context.step_summaries.items():
-            if step_id == "_history":
-                continue
-            parts.append(f"### {step_id}\n{summary}\n")
-
-        if context.key_findings:
-            parts.append("### 关键发现\n" + "\n".join(f"- {f}" for f in context.key_findings) + "\n")
+        summary_lines = self._compact_summary_lines(context)
+        if summary_lines:
+            parts.append("## 简要结论\n" + "\n".join(f"- {line}" for line in summary_lines))
+        else:
+            parts.append("已完成处理，结果表和图表见下方。")
 
         attachments = self._list_attachments(workspace)
         if attachments:
             parts.append("## 附件\n" + "\n".join(f"- [{a}]({a})" for a in attachments) + "\n")
 
-        return "\n".join(parts)
+        return "\n\n".join(parts)
+
+    def _compact_summary_lines(self, context: TaskContext, max_lines: int = 4) -> list[str]:
+        lines: list[str] = []
+        for finding in context.key_findings:
+            clean = self._clean_summary_line(str(finding))
+            if clean:
+                lines.append(clean)
+            if len(lines) >= max_lines:
+                return lines
+
+        for step_id, summary in context.step_summaries.items():
+            if step_id == "_history":
+                continue
+            for raw_line in str(summary).splitlines():
+                clean = self._clean_summary_line(raw_line)
+                if not clean:
+                    continue
+                lines.append(clean)
+                if len(lines) >= max_lines:
+                    return lines
+        return lines
+
+    def _clean_summary_line(self, line: str) -> str:
+        clean = " ".join(line.strip().split())
+        if not clean:
+            return ""
+        lowered = clean.lower()
+        noisy_tokens = (
+            "output/",
+            "normalized/",
+            ".parquet",
+            ".xlsx",
+            ".csv",
+            "保存",
+            "导出",
+            "文件",
+            "path",
+        )
+        if any(token in lowered for token in noisy_tokens):
+            return ""
+        if len(clean) > 220:
+            clean = clean[:217].rstrip() + "..."
+        return clean
 
     def _list_attachments(self, workspace: Any) -> list[str]:
         try:

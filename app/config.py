@@ -15,6 +15,10 @@ class Config:
     llm_base_url: str = field(default_factory=lambda: os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com"))
     llm_model: str = field(default_factory=lambda: os.getenv("DEEPSEEK_MODEL", "deepseek-v4-pro"))
     llm_api_key: str = field(default_factory=lambda: os.getenv("DEEPSEEK_API_KEY", ""))
+    llm_thinking: bool = field(
+        default_factory=lambda: os.getenv("DEEPSEEK_THINKING", "true").lower() in {"1", "true", "yes", "on"}
+    )
+    llm_reasoning_effort: str = field(default_factory=lambda: os.getenv("DEEPSEEK_REASONING_EFFORT", ""))
 
     budget_preset: str = field(default_factory=lambda: os.getenv("BUDGET_PRESET", "deepseek"))
 

@@ -25,6 +25,31 @@ from app.workspace import Workspace
 logger = logging.getLogger(__name__)
 
 
+_FULL_REPORT_KEYWORDS = (
+    "报告",
+    "分析报告",
+    "完整分析",
+    "详细分析",
+    "深度分析",
+    "专题分析",
+    "汇报材料",
+    "总结材料",
+    "写一篇",
+    "撰写",
+    "word",
+    "不少于",
+)
+_NO_REPORT_KEYWORDS = (
+    "不要报告",
+    "不需要报告",
+    "无需报告",
+    "简单说",
+    "简单分析",
+    "一两句",
+    "两句话",
+)
+
+
 @dataclass
 class ExecResult:
     success: bool
@@ -65,7 +90,11 @@ class TaskResult:
     error_summary: str = ""
 
 
-Executor = Callable[[Step, TaskContext, Any], Awaitable[StepResult]]
+StepStartCallback = Callable[[Step, int, int], Awaitable[None]]
+StepEndCallback = Callable[[Step, StepResult], Awaitable[None]]
+PlanReadyCallback = Callable[[ExecutionPlan], Awaitable[None]]
+TokenCallback = Callable[[str], Awaitable[None]]
+Executor = Callable[[Step, TaskContext, Any, TokenCallback | None], Awaitable[StepResult]]
 
 
 class Orchestrator:
@@ -89,8 +118,11 @@ class Orchestrator:
         query: str,
         session: Session,
         *,
-        on_step_start: Callable[[Step], Awaitable[None]] | None = None,
-        on_step_end: Callable[[Step, StepResult], Awaitable[None]] | None = None,
+        on_step_start: StepStartCallback | None = None,
+        on_step_end: StepEndCallback | None = None,
+        on_plan_ready: PlanReadyCallback | None = None,
+        on_report_token: TokenCallback | None = None,
+        on_reasoning_token: TokenCallback | None = None,
     ) -> TaskResult:
         """Full pipeline: Ingest → Preprocess → Profile → Plan → Execute → Report.
 
@@ -155,11 +187,19 @@ class Orchestrator:
         for s in plan.steps:
             logger.info("  Step %s [%s]: %s", s.id, s.tool, s.description)
         workspace.save_json("plan.json", plan.to_dict())
+        if on_plan_ready:
+            await on_plan_ready(plan)
 
         # 执行
-        self._on_step_start = on_step_start
-        self._on_step_end = on_step_end
-        result = await self.run_plan(plan, context, workspace)
+        result = await self.run_plan(
+            plan,
+            context,
+            workspace,
+            on_step_start=on_step_start,
+            on_step_end=on_step_end,
+            on_report_token=on_report_token,
+            on_reasoning_token=on_reasoning_token,
+        )
 
         # 更新 session（含结果摘要，供追问使用）
         session.update_after_task(
@@ -204,6 +244,14 @@ class Orchestrator:
             "}\n```\n"
             "tool 只能是 python 或 knowledge。\n"
             "确保 steps 按执行顺序排列，depends_on 引用已有 step id。\n"
+            "普通统计、筛选、排名、导出结果表、生成图表的问题，report_outline 必须返回 []；"
+            "最终由系统展示表格/图表并给一两句简短结论。\n"
+            "普通 Excel 分析任务默认只生成 1 个 python 步骤，一次性完成读取、清洗、计算和导出；"
+            "不要把读取数据、清洗、计算、导出拆成多个 python 步骤。\n"
+            "只有用户明确要求完整长报告，或任务必须先探索再决策时，才生成多个步骤；"
+            "即使复杂数据分析，也优先用 1 个 python 步骤完成。\n"
+            "只有当用户明确要求“报告、分析报告、详细分析、汇报材料、长文”等完整写作产物时，"
+            "才生成 report_outline。\n"
             "不要在 instruction 中硬编码 normalized 文件的绝对路径；只描述要使用哪张表和哪些字段，"
             "代码生成阶段会根据数据概况里的 tables[].path 读取正式数据文件。\n"
             "如果用户要求导出、保存、输出结果表，计划必须明确要求把用户可见产物写入 output/ 目录。\n"
@@ -235,7 +283,7 @@ class Orchestrator:
             except (json.JSONDecodeError, ValueError):
                 continue
             if isinstance(data, dict) and ("steps" in data or "plan" in data):
-                return self._dict_to_plan(data)
+                return self._dict_to_plan(data, user_query=fallback_instruction)
 
         # Fallback: single generic step
         logger.warning("无法解析 Plan 响应，使用默认单步计划")
@@ -278,7 +326,7 @@ class Orchestrator:
                 unique.append(candidate)
         return unique
 
-    def _dict_to_plan(self, data: dict) -> ExecutionPlan:
+    def _dict_to_plan(self, data: dict, user_query: str = "") -> ExecutionPlan:
         if "steps" not in data and isinstance(data.get("plan"), list):
             plan_items = data.get("plan") or []
             instruction_parts = []
@@ -299,7 +347,7 @@ class Orchestrator:
                         instruction="\n".join(instruction_parts),
                         is_exploratory=False,
                     )
-                ], report_outline=data.get("report_outline", []))
+                ], report_outline=self._report_outline_for_query(data, user_query))
 
         steps = []
         for item in data.get("steps", []):
@@ -312,14 +360,65 @@ class Orchestrator:
                     depends_on=item.get("depends_on", []),
                     is_exploratory=item.get("is_exploratory", False),
                 ))
-        outline = data.get("report_outline", [])
+        outline = self._report_outline_for_query(data, user_query)
+        steps = self._collapse_result_steps_if_needed(steps, user_query, outline)
         return ExecutionPlan(steps=steps, report_outline=outline)
+
+    def _collapse_result_steps_if_needed(
+        self,
+        steps: list[Step],
+        user_query: str,
+        outline: list[dict[str, Any]],
+    ) -> list[Step]:
+        if len(steps) <= 2 or outline or self._wants_full_report(user_query):
+            return steps
+        if any(step.tool != "python" for step in steps):
+            return steps
+
+        combined = "\n".join(
+            f"{index + 1}. {step.description or step.instruction}: {step.instruction}"
+            for index, step in enumerate(steps)
+        )
+        logger.info("普通结果型任务 planner 返回 %d 个 python 步骤，合并为单步执行", len(steps))
+        return [
+            Step(
+                id="s1",
+                tool="python",
+                description="完成数据分析并输出结果",
+                instruction=(
+                    f"{user_query or '根据用户需求完成数据分析并输出结果。'}\n\n"
+                    "请在一个 Python 脚本中一次性完成以下子任务，并把用户可见产物写入 output/ 目录：\n"
+                    f"{combined}"
+                ),
+                is_exploratory=True,
+            )
+        ]
+
+    def _report_outline_for_query(self, data: dict, user_query: str = "") -> list[dict[str, Any]]:
+        outline = data.get("report_outline", [])
+        if not isinstance(outline, list):
+            return []
+        if user_query and outline and not self._wants_full_report(user_query):
+            logger.info("用户未要求完整报告，忽略 planner 返回的 report_outline")
+            return []
+        return [item for item in outline if isinstance(item, dict)]
+
+    def _wants_full_report(self, query: str) -> bool:
+        normalized = "".join((query or "").lower().split())
+        if any(keyword in normalized for keyword in _NO_REPORT_KEYWORDS):
+            return False
+        return any(keyword in normalized for keyword in _FULL_REPORT_KEYWORDS)
 
     async def run_plan(
         self,
         plan: ExecutionPlan,
         context: TaskContext,
         workspace: Any,
+        *,
+        on_step_start: StepStartCallback | None = None,
+        on_step_end: StepEndCallback | None = None,
+        on_report_token: TokenCallback | None = None,
+        on_reasoning_token: TokenCallback | None = None,
     ) -> TaskResult:
         context.plan = plan
         while True:
@@ -337,15 +436,21 @@ class Orchestrator:
             total_steps = len(plan.steps)
             logger.info("▶ 执行 Step %s [%d/%d] [%s]: %s", step.id, step_index, total_steps, step.tool, step.description)
 
-            on_start = getattr(self, "_on_step_start", None)
-            if on_start:
-                await on_start(step, step_index, total_steps)
+            if on_step_start:
+                await on_step_start(step, step_index, total_steps)
 
-            result = await self._execute_step(step, context, workspace)
+            result = await self._execute_step(step, context, workspace, on_reasoning_token)
             check = self.tools.checker.validate(step, result, context, workspace)
 
             if check.status == "failed" and not result.retries_exhausted:
-                result = await self._repair_from_check(step, result, check, context, workspace)
+                result = await self._repair_from_check(
+                    step,
+                    result,
+                    check,
+                    context,
+                    workspace,
+                    on_reasoning_token,
+                )
                 check = self.tools.checker.validate(step, result, context, workspace)
 
             if result.failed or check.status == "failed":
@@ -389,9 +494,8 @@ class Orchestrator:
             plan.mark_done(step.id, check=check.status)
             workspace.save_json("plan.json", plan.to_dict())
 
-            on_end = getattr(self, "_on_step_end", None)
-            if on_end:
-                await on_end(step, result)
+            if on_step_end:
+                await on_step_end(step, result)
 
             # Adaptive: 根据结果动态调整后续计划
             if self._should_adapt(step, result, plan.remaining_steps()):
@@ -402,7 +506,12 @@ class Orchestrator:
         # 生成报告（有 outline 时分章节 LLM 调用，无 outline 时简单汇总）
         logger.info("所有步骤执行完毕，开始生成报告...")
         try:
-            report = await self.reporter.generate(context, workspace)
+            report = await self.reporter.generate(
+                context,
+                workspace,
+                stream_callback=on_report_token,
+                reasoning_callback=on_reasoning_token,
+            )
             logger.info("报告生成完成, 长度=%d chars", len(report))
         except Exception:
             logger.exception("Reporter 生成报告失败，降级为简单汇总")
@@ -422,7 +531,13 @@ class Orchestrator:
         workspace.write_state(status="completed", current_step=None)
         return TaskResult(report=report, files=self._absolute_output_files(workspace))
 
-    async def _execute_step(self, step: Step, context: TaskContext, workspace: Any) -> StepResult:
+    async def _execute_step(
+        self,
+        step: Step,
+        context: TaskContext,
+        workspace: Any,
+        reasoning_callback: TokenCallback | None = None,
+    ) -> StepResult:
         executor = self.executors.get(step.tool)
         if executor is None:
             return StepResult(
@@ -433,7 +548,7 @@ class Orchestrator:
                 retries_exhausted=True,
             )
         try:
-            return await executor(step, context, workspace)
+            return await executor(step, context, workspace, reasoning_callback)
         except Exception as exc:
             logger.exception("步骤执行异常: %s", step.id)
             return StepResult(
@@ -445,16 +560,28 @@ class Orchestrator:
             )
 
     async def _execute_knowledge(
-        self, step: Step, context: TaskContext, workspace: Any
+        self,
+        step: Step,
+        context: TaskContext,
+        workspace: Any,
+        reasoning_callback: TokenCallback | None = None,
     ) -> StepResult:
         chunks = self.tools.knowledge.search(step.instruction, top_k=3)
         return StepResult(stdout=str(chunks), files=[])
 
     async def _execute_python(
-        self, step: Step, context: TaskContext, workspace: Any
+        self,
+        step: Step,
+        context: TaskContext,
+        workspace: Any,
+        reasoning_callback: TokenCallback | None = None,
     ) -> StepResult:
         prompt = self.assembler.assemble(context, step)
-        code_response = await self.llm.call(prompt, max_tokens=16000)
+        code_response = await self.llm.call(
+            prompt,
+            max_tokens=16000,
+            reasoning_callback=reasoning_callback,
+        )
         code = self._extract_code_block(code_response)
         exec_result = self.tools.sandbox.execute(
             code=code,
@@ -471,7 +598,9 @@ class Orchestrator:
             repair_prompt = self.assembler.assemble_repair(
                 context, step, code, exec_result.stderr
             )
-            code = self._extract_code_block(await self.llm.call(repair_prompt))
+            code = self._extract_code_block(
+                await self.llm.call(repair_prompt, reasoning_callback=reasoning_callback)
+            )
             exec_result = self.tools.sandbox.execute(
                 code=code,
                 workdir=workspace.path,
@@ -497,6 +626,7 @@ class Orchestrator:
         check: CheckResult,
         context: TaskContext,
         workspace: Any,
+        reasoning_callback: TokenCallback | None = None,
     ) -> StepResult:
         script_text = workspace.read_text(result.script_path) if result.script_path else ""
         repair_prompt = self.assembler.assemble_repair(
@@ -506,7 +636,9 @@ class Orchestrator:
             stderr=result.error,
             check_report=check.to_prompt_text(),
         )
-        code = self._extract_code_block(await self.llm.call(repair_prompt))
+        code = self._extract_code_block(
+            await self.llm.call(repair_prompt, reasoning_callback=reasoning_callback)
+        )
         exec_result = self.tools.sandbox.execute(
             code=code,
             workdir=workspace.path,
@@ -657,6 +789,8 @@ def build_orchestrator(config: Any | None = None) -> Orchestrator:
         base_url=cfg.llm_base_url,
         model=cfg.llm_model,
         api_key=cfg.llm_api_key,
+        thinking=cfg.llm_thinking,
+        effort=cfg.llm_reasoning_effort,
         timeout=cfg.llm_timeout_seconds,
     )
     tools = SimpleNamespace(
