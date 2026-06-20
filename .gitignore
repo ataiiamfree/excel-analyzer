@@ -5,11 +5,15 @@ __pycache__/
 dist/
 build/
 *.egg
+web/dist/
+web/tsconfig.tsbuildinfo
 
 # 虚拟环境
 venv/
 .venv/
 env/
+node_modules/
+web/node_modules/
 
 # IDE
 .idea/
@@ -27,6 +31,7 @@ Thumbs.db
 # 运行时工作空间（含用户上传的 Excel 和生成的数据，不进版本控制）
 workspace/
 .files/
+eval_runs/
 
 # pytest
 .pytest_cache/
@@ -45,3 +50,6 @@ runtime.log
 
 # docs 子目录下 Chainlit 运行时生成的配置（非项目文件）
 docs/.chainlit/
+
+# matplotlib 字体缓存（由运行环境生成，不是项目配置）
+app/tools/mpl_config/fontlist*.json

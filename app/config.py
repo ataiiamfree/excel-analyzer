@@ -23,6 +23,11 @@ class Config:
     budget_preset: str = field(default_factory=lambda: os.getenv("BUDGET_PRESET", "deepseek"))
 
     workspace_dir: str = field(default_factory=lambda: os.getenv("WORKSPACE_DIR", "./workspace"))
+    web_dist_dir: str = field(default_factory=lambda: os.getenv("WEB_DIST_DIR", "./web/dist"))
+    api_db_path: str = field(default_factory=lambda: os.getenv("API_DB_PATH", "./workspace/chat_excel.sqlite3"))
+    cors_origins: str = field(default_factory=lambda: os.getenv("CORS_ORIGINS", "http://127.0.0.1:5173,http://localhost:5173"))
+    run_timeout_seconds: int = field(default_factory=lambda: int(os.getenv("RUN_TIMEOUT_SECONDS", "300")))
+    ephemeral_ttl_hours: int = field(default_factory=lambda: int(os.getenv("EPHEMERAL_TTL_HOURS", "24")))
     llm_timeout_seconds: float = field(default_factory=lambda: float(os.getenv("LLM_TIMEOUT_SECONDS", "180")))
     sandbox_timeout: int = field(default_factory=lambda: int(os.getenv("SANDBOX_TIMEOUT", "60")))
     sandbox_memory_mb: int = field(default_factory=lambda: int(os.getenv("SANDBOX_MEMORY_MB", "1024")))

@@ -1,4 +1,4 @@
-.PHONY: install run test clean lint
+.PHONY: install run web-install web-dev web-build dev test clean lint
 
 HOST ?= 127.0.0.1
 PORT ?= 8000
@@ -7,7 +7,21 @@ install:
 	pip install -r requirements.txt
 
 run:
-	chainlit run app/main.py --host $(HOST) --port $(PORT)
+	uvicorn app.api.server:app --host $(HOST) --port $(PORT) --reload
+
+web-install:
+	cd web && npm install
+
+web-dev:
+	cd web && npm run dev
+
+web-build:
+	cd web && npm run build
+
+dev:
+	@echo "Run backend and frontend in two terminals:"
+	@echo "  make run"
+	@echo "  make web-dev"
 
 test:
 	python -m pytest tests/ -v

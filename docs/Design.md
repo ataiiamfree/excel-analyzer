@@ -30,9 +30,9 @@
 - **TaskContext + Artifact Manifest 是信息桥梁**：步骤间通过结构化摘要、文件产物和 lineage 传递信息，有严格大小预算
 - **单次调用 token 有硬上限**：任何一次 LLM 调用的输入不超过预算上限（standard: 4K / generous: 16K，见第六章 Token 预算全景）
 - **Adaptive Plan-Execute 编排**：先粗略规划全局，每步执行后根据实际结果动态细化下一步（详见 Implementation-Plan.md 第〇章）
-- **用户可见内容与思考分离**：最终报告章节和简短结论通过 Chainlit 流式展示；DeepSeek 返回的 `reasoning_content` 只通过独立回调展示为“DeepSeek 思考”，不混入报告正文、Python 代码或结构化 JSON 输出
+- **用户可见内容与思考分离**：最终报告章节和简短结论通过 FastAPI WebSocket 流式展示；DeepSeek 返回的 `reasoning_content` 只通过独立事件展示为“思考过程”，不混入报告正文、Python 代码或结构化 JSON 输出
 - **Plan-Execute 过程可见**：规划完成后在 UI 展示执行计划；每个 Execute 步骤用可展开步骤展示输入、stdout 摘要、脚本路径和产物
-- **过程与结果视觉分层**：Chainlit 消息写入不可见文本 UI 类型标记、`metadata/tags`，前端只读取标记做样式分层，不扫描可见中文文本，也不把 HTML marker 写进 Markdown；思考内容使用更小、更灰的辅助样式，最终结果保持正式答案样式
+- **过程与结果视觉分层**：WebSocket 事件区分 reasoning / plan / step / report / artifact，React 前端按结构化 payload 渲染，不扫描可见中文文本；思考内容使用更小、更灰的辅助样式，最终结果保持正式答案样式
 - **结果型任务单脚本优先**：普通 Excel 分析、导出、画图任务默认合并为一个 Python 步骤，避免多步重复生成大段代码
 - **原始文件不可变**：永远保留 raw workbook，所有清洗、拆表、派生字段都写入新的 normalized/artifact 文件
 - **结果先校验再报告**：代码跑通不等于分析正确，关键步骤必须经过结构化结果检查
@@ -42,15 +42,15 @@
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                    Chainlit 交互层                            │
+│             FastAPI + React 交互层                             │
 │                                                             │
-│  用户 ←→ 聊天界面（上传 Excel / 提问 / 追问 / 查看结果）       │
+│  用户 ←→ React 三栏界面（会话列表 / 聊天 / 产物预览）          │
 │           │                                                 │
-│           │  对话历史（自动持久化）                             │
+│           │  REST 会话/文件/产物 + WebSocket 事件流             │
 │           │  跨会话记忆（user_memory.json）                    │
 │           │                                                 │
 │  ┌────────▼──────────┐                                      │
-│  │  Session 管理       │  管理会话状态、追问复用、对话摘要       │
+│  │ SQLite + Session   │  持久化会话、消息、产物并复用预处理缓存  │
 │  └────────┬──────────┘                                      │
 └───────────┼─────────────────────────────────────────────────┘
             │
@@ -1295,8 +1295,8 @@ class Reporter:
                 prev_ending=sections[-1][-200:] if sections else ""
             )
 
-            # 有 Chainlit 回调时使用 llm.stream，把章节内容逐块推给前端；
-            # DeepSeek reasoning_content 通过单独回调显示为“DeepSeek 思考”。
+            # 有 WebSocket 回调时使用 llm.stream，把章节内容逐块推给前端；
+            # DeepSeek reasoning_content 通过单独回调显示为“思考过程”。
             # 无回调时仍可使用普通 call，便于测试和批处理复用。
             chunks = []
             async for token in self.llm.stream(prompt, max_tokens=3000):
@@ -1480,7 +1480,14 @@ excel-analyzer/
 │
 ├── app/
 │   ├── __init__.py
-│   ├── main.py                     # Chainlit 入口（chainlit run app/main.py）
+│   ├── main.py                     # 旧测试兼容 shim；服务入口为 app.api.server
+│   ├── api/                        # FastAPI REST / WS / SQLite persistence
+│   │   ├── server.py               # uvicorn app.api.server:app
+│   │   ├── schemas.py              # HTTP payload schema
+│   │   ├── ws_events.py            # WebSocket event schema
+│   │   ├── routers/                # conversations / artifacts / runs
+│   │   ├── ws/                     # ConnectionManager + runner
+│   │   └── persistence/            # SQLite repository
 │   ├── workspace.py                # 本地任务目录、state、artifact manifest
 │   ├── session.py                  # Session 管理（多轮对话、追问复用）
 │   │
@@ -1519,8 +1526,11 @@ excel-analyzer/
 ├── memory/
 │   └── user_memory.json            # 跨会话记忆（用户偏好、已知 schema）
 │
-├── .chainlit/
-│   └── config.toml                 # Chainlit 配置（UI、对话历史等）
+├── web/                            # Vite + React + TypeScript 前端
+│   ├── src/api/                    # HTTP / WS client 与共享 TS 类型
+│   ├── src/layout/                 # 三栏 AppShell / Sidebar / ArtifactPanel
+│   ├── src/chat/                   # 消息、计划、步骤、报告、输入框
+│   └── src/artifacts/              # 图表、表格、文件预览
 │
 ├── workspace/                      # 运行时工作目录（git 忽略）
 ├── requirements.txt
@@ -1539,43 +1549,25 @@ excel-analyzer/
 当前版本是单用户本地/内网服务，不做登录鉴权。API 只需要围绕 task lifecycle 和文件预览设计清楚。
 
 ```
-POST /api/analyze
-  Body: multipart/form-data
-    - file: Excel 文件
-    - query: 用户问题
-  Response: { task_id, status: "processing" }
+GET    /api/conversations
+POST   /api/conversations                 # multipart: file + optional query
+GET    /api/conversations/{id}
+PATCH  /api/conversations/{id}
+DELETE /api/conversations/{id}
+GET    /api/conversations/{id}/messages
+GET    /api/conversations/{id}/artifacts
+POST   /api/conversations/{id}/files
+POST   /api/conversations/{id}/runs        # 同步阻塞，会话内 eval/复现
 
-GET /api/task/{task_id}/status
-  Response: {
-    status: "profiling|planning|executing|reporting|completed|failed",
-    current_step: "s3",
-    total_steps: 7,
-    completed_steps: ["s1", "s2"],
-    progress_pct: 42
-  }
+POST   /api/runs                           # 一次性同步问答，不建侧栏会话
+GET    /api/runs/{run_id}
+DELETE /api/runs/{run_id}
 
-GET /api/task/{task_id}/result
-  Response: {
-    report: "markdown 报告内容",
-    charts: ["chart_1.png", "chart_2.png"],
-    files: ["明细导出.xlsx"],
-    key_findings: ["发现1", "发现2"]
-  }
+GET    /api/artifacts/{id}
+GET    /api/artifacts/{id}/preview
+GET    /api/artifacts/{id}/sha256
 
-POST /api/task/{task_id}/cancel
-  Response: { task_id, status: "cancelled" }
-
-POST /api/task/{task_id}/rerun-step/{step_id}
-  Response: { task_id, status: "processing" }
-
-GET /api/task/{task_id}/artifacts
-  Response: artifact_manifest.json
-
-GET /api/task/{task_id}/files/{filename}
-  Response: 文件下载
-
-GET /api/task/{task_id}/preview/{filename}
-  Response: { columns: [...], rows: [...前20行...], total_rows: 5000 }
+WS     /ws/conversations/{id}
 ```
 
 下载和预览接口必须只允许访问当前 task 的 `output/`、`normalized/` 和 manifest 登记文件，不能用用户传入路径直接拼接。
@@ -1633,105 +1625,30 @@ class LLMClient:
 
 ## 九、Session 管理与交互层
 
-### 9.1 交互层：Chainlit
+### 9.1 交互层：FastAPI + React
 
-当前版本使用 [Chainlit](https://docs.chainlit.io/) 作为交互层，替代手写 FastAPI + HTML 前端。
+当前版本使用 `app.api.server:app` 作为服务入口：
 
-选择 Chainlit 的理由：
-- 原生支持文件上传、Markdown 渲染、图表嵌入、文件下载
-- 内置对话历史持久化（用户重新打开页面可回溯历史会话）
-- Step 折叠展示（每个分析步骤的进度实时可见）
-- 底层是 FastAPI，仍然可以暴露 REST API 给其他系统调用
-- 开发量极小，核心逻辑不变
+- React 前端位于 `web/`，采用 Vite + React 18 + TypeScript。
+- REST 负责会话列表、历史消息、文件上传、产物下载与表格预览。
+- WebSocket `/ws/conversations/{id}` 负责流式分析事件。
+- 后端仍复用 `app/agent/` 业务核心，不重写 Plan-Execute-Repair 编排。
+- `app/main.py` 只保留旧单测需要的纯函数导出，不再作为 Web 入口。
 
-```python
-import chainlit as cl
+WebSocket 服务端事件：
 
-@cl.on_chat_start
-async def start():
-    """会话开始：让用户上传 Excel"""
-    files = await cl.AskFileMessage(
-        content="请上传 Excel 文件",
-        accept=[
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            "application/vnd.ms-excel.sheet.macroEnabled.12",
-        ],
-        max_size_mb=100,
-    ).send()
-    # 保存到 session
-    session = Session.create(file=files[0])
-    cl.user_session.set("session", session)
-    await cl.Message(content=f"已上传 **{files[0].name}**，请输入你的分析需求。").send()
-
-@cl.on_message
-async def main(message: cl.Message):
-    """接收用户消息，执行分析"""
-    session = cl.user_session.get("session")
-
-    # 判断是首次分析还是追问
-    is_follow_up = len(session.tasks) > 0
-
-    # 创建任务
-    task_id = session.create_task(message.content, is_follow_up=is_follow_up)
-
-    # 执行分析，每步用 cl.Step 展示进度
-    async with cl.Step(name="理解 Excel 结构") as step:
-        # ... ingestor + preprocessor ...
-        step.output = f"检测到 {n_tables} 个数据表"
-
-    async with cl.Step(name="生成分析计划") as step:
-        # ... planner ...
-        step.output = f"计划 {n_steps} 个步骤"
-
-    # 逐步执行
-    for step_info in plan.steps:
-        async with cl.Step(name=step_info.description) as step:
-            # ... execute ...
-            step.output = result.summary
-
-    # 展示执行计划和每个 Execute 步骤；步骤完成后显示 stdout 摘要、脚本路径和产物。
-    # 不同消息类型会写入不可见文本 marker + metadata/tags，并由 public/chat_excel.js + CSS 做视觉分层。
-    # marker 不使用 HTML，避免 Chainlit Markdown 转义后把源码展示给用户。
-    await cl.Message(
-        content=ui_content("plan", format_plan(plan)),
-        metadata={"cx_kind": "plan"},
-        tags=["cx-plan"],
-    ).send()
-    for step in plan.steps:
-        async with cl.Step(
-            name=step.description,
-            type="tool",
-            metadata={"cx_kind": "execute"},
-            tags=["cx-execute"],
-        ) as step_panel:
-            step_panel.input = step.instruction
-            result = await run_step(step)
-            step_panel.output = ui_content("execute", summarize_step_result(result))
-
-    # 流式发送报告文本；DeepSeek 思考内容在独立消息中展示。
-    # 附件和表格预览等产物仍在任务结束后单独发送。
-    report_msg = cl.Message(
-        content=ui_content("result", ""),
-        metadata={"cx_kind": "result"},
-        tags=["cx-result"],
-    )
-    await report_msg.send()
-    async for token in report_tokens:
-        await report_msg.stream_token(token)
-    await report_msg.update()
-
-    # 发送图表和文件
-    elements = []
-    for chart in charts:
-        elements.append(cl.Image(path=chart, name=os.path.basename(chart)))
-    for file in download_files:
-        elements.append(cl.File(path=file, name=os.path.basename(file)))
-
-    if elements:
-        await cl.Message(content="分析产物：", elements=elements).send()
-
-    # 更新 session
-    session.finish_task(task_id)
+```ts
+type ServerEvent =
+  | { type: "run.start"; seq: number; message_id: string }
+  | { type: "plan.ready"; seq: number; steps: PlanStep[] }
+  | { type: "step.start"; seq: number; step_id: string; index: number; total: number }
+  | { type: "reasoning.delta"; seq: number; delta: string }
+  | { type: "step.end"; seq: number; step_id: string; status: "done" | "failed" }
+  | { type: "report.delta"; seq: number; delta: string }
+  | { type: "artifact.created"; seq: number; artifact_id: string; name: string }
+  | { type: "run.complete"; seq: number; message_id: string; report: string }
+  | { type: "run.failed"; seq: number; error_summary: string }
+  | { type: "cancelled"; seq: number };
 ```
 
 ### 9.2 Session 管理
@@ -1856,21 +1773,15 @@ async def run(self, query: str, session: Session) -> TaskResult:
 
 ### 9.4 对话记录持久化
 
-Chainlit 内置了对话历史功能，配置即可：
+对话记录由 `app/api/persistence/store.py` 写入 SQLite，默认位置为
+`WORKSPACE_DIR/chat_excel.sqlite3`。持久化对象包括：
 
-```toml
-# .chainlit/config.toml
-[project]
-name = "Excel 智能分析"
-enable_telemetry = false
+- `conversations`：会话标题、上传文件名、文件大小、sheet/row profile、收藏与归档状态。
+- `messages`：用户消息与 assistant payload；assistant payload 保存 plan、steps、reasoning、report、artifact_ids 与 metrics。
+- `artifacts`：产物相对路径、类型、大小、sha256 和下载/预览所需元数据。
 
-[features]
-prompt_playground = false
-
-[UI]
-name = "Excel 智能分析 Agent"
-description = "上传 Excel，用自然语言分析数据"
-```
+React 前端打开会话时通过 `/api/conversations/{id}/messages` 回放历史，通过
+`/api/conversations/{id}/artifacts` 恢复右侧产物面板。
 
 对话历史自动存储在本地，用户重新打开页面时左侧栏显示历史会话列表。
 

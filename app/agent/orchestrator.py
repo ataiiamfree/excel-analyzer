@@ -138,7 +138,7 @@ class Orchestrator:
             profile = session.profile
         else:
             # 首次分析：新 workspace + 全流程
-            workspace = Workspace(root=self.config.workspace_dir)
+            workspace = Workspace(root=self.config.workspace_dir, task_id=session.session_id)
             logger.info("首次分析，开始全流程: Ingest → Preprocess → Profile → Plan → Execute → Report")
             raw_file_path = Path(workspace.save_upload(session.file_path)).resolve()
             logger.info("文件已复制到 workspace: %s", raw_file_path)
