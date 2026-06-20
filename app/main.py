@@ -49,6 +49,10 @@ logger = logging.getLogger(__name__)
 
 
 EXCEL_EXTENSIONS = {".xlsx", ".xlsm"}
+EXCEL_ACCEPT_TYPES = [
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "application/vnd.ms-excel.sheet.macroEnabled.12",
+]
 DOWNLOADABLE_EXTENSIONS = {
     ".xlsx", ".xlsm", ".xls", ".csv", ".tsv", ".parquet", ".pdf",
     ".png", ".jpg", ".jpeg", ".svg",
@@ -64,6 +68,7 @@ UI_TAG_PLAN = "cx-plan"
 UI_TAG_EXECUTE = "cx-execute"
 UI_TAG_RESULT = "cx-result"
 UI_TAG_ARTIFACT = "cx-artifact"
+UI_TAG_PREVIEW = "cx-preview"
 UPLOAD_HELP = (
     "把 Excel 文件拖到这里，或点击选择文件。支持 `.xlsx` / `.xlsm`，单个文件不超过 100MB。"
 )
@@ -168,11 +173,16 @@ def _table_preview_for_path(path: str) -> pd.DataFrame | None:
 async def _stream_text_message(
     text: str,
     *,
+    kind: str | None = None,
     metadata: dict[str, str] | None = None,
     tags: list[str] | None = None,
 ) -> cl.Message:
     """Stream already assembled text so short responses use the same UI path."""
-    msg = cl.Message(content="", metadata=metadata, tags=tags)
+    msg = cl.Message(
+        content=_message_ui_content(kind, "") if kind else "",
+        metadata=metadata,
+        tags=tags,
+    )
     await msg.send()
     for chunk in _chunk_text_for_stream(text):
         await msg.stream_token(chunk)
@@ -186,6 +196,11 @@ def _chunk_text_for_stream(text: str, chunk_size: int = 32) -> list[str]:
 
 def _message_ui_metadata(kind: str) -> dict[str, str]:
     return {"cx_kind": kind}
+
+
+def _message_ui_content(kind: str, content: str) -> str:
+    marker = f'<span class="cx-ui-marker" data-cx-kind="{kind}" aria-hidden="true"></span>'
+    return f"{marker}\n{content}" if content else marker
 
 
 def _format_plan_for_ui(steps: list[Step]) -> str:
@@ -280,7 +295,7 @@ async def start():
             f"{UPLOAD_HELP}\n\n"
             "上传后直接输入你的问题；也可以在任意时候发送新的 Excel 文件切换数据。"
         ),
-        accept=["*/*"],
+        accept=EXCEL_ACCEPT_TYPES,
         max_size_mb=100,
     ).send()
 
@@ -343,7 +358,7 @@ async def main(message: cl.Message):
             return
         if report_msg is None:
             report_msg = cl.Message(
-                content="",
+                content=_message_ui_content("result", ""),
                 metadata=_message_ui_metadata("result"),
                 tags=[UI_TAG_RESULT],
             )
@@ -356,7 +371,7 @@ async def main(message: cl.Message):
             return
         if reasoning_msg is None:
             reasoning_msg = cl.Message(
-                content="**DeepSeek 思考**\n\n",
+                content=_message_ui_content("reasoning", "**DeepSeek 思考**\n\n"),
                 metadata=_message_ui_metadata("reasoning"),
                 tags=[UI_TAG_REASONING],
             )
@@ -375,16 +390,9 @@ async def main(message: cl.Message):
             await reasoning_msg.stream_token("\n\n（思考内容较长，后续已省略。）")
             reasoning_truncated = True
 
-    reporter = getattr(orchestrator, "reporter", None)
-    if reporter is not None:
-        reporter.stream_callback = on_report_token
-    llm = getattr(orchestrator, "llm", None)
-    if llm is not None:
-        llm.reasoning_callback = on_reasoning_token
-
     # Progress callbacks — update a single status message in place
     progress_msg = cl.Message(
-        content=f"正在分析 **{current_file}**...",
+        content=_message_ui_content("progress", f"正在分析 **{current_file}**..."),
         metadata=_message_ui_metadata("progress"),
         tags=[UI_TAG_PROGRESS],
     )
@@ -392,7 +400,7 @@ async def main(message: cl.Message):
 
     async def on_plan_ready(plan):
         await cl.Message(
-            content=_format_plan_for_ui(plan.steps),
+            content=_message_ui_content("plan", _format_plan_for_ui(plan.steps)),
             metadata=_message_ui_metadata("plan"),
             tags=[UI_TAG_PLAN],
         ).send()
@@ -402,6 +410,7 @@ async def main(message: cl.Message):
             progress_msg.content = f"正在分析 **{current_file}**... `[{step_index}/{total_steps}]` {step.description}"
         else:
             progress_msg.content = f"正在分析 **{current_file}**... {step.description}"
+        progress_msg.content = _message_ui_content("progress", progress_msg.content)
         await progress_msg.update()
         step_title = f"[{step_index}/{total_steps}] {step.description}" if total_steps > 0 else step.description
         cl_step = cl.Step(
@@ -419,12 +428,12 @@ async def main(message: cl.Message):
         cl_step = active_steps.pop(step.id, None)
         if cl_step is None:
             await cl.Message(
-                content=_format_step_result_for_ui(step, result),
+                content=_message_ui_content("execute", _format_step_result_for_ui(step, result)),
                 metadata=_message_ui_metadata("execute"),
                 tags=[UI_TAG_EXECUTE],
             ).send()
             return
-        cl_step.output = _format_step_result_for_ui(step, result)
+        cl_step.output = _message_ui_content("execute", _format_step_result_for_ui(step, result))
         await cl_step.__aexit__(None, None, None)
 
     try:
@@ -434,20 +443,18 @@ async def main(message: cl.Message):
             on_step_start=on_step_start,
             on_step_end=on_step_end,
             on_plan_ready=on_plan_ready,
+            on_report_token=on_report_token,
+            on_reasoning_token=on_reasoning_token,
         )
     except Exception as e:
         logger.exception("分析过程出错")
         await cl.Message(content=_friendly_error(e)).send()
         return
     finally:
-        if reporter is not None:
-            reporter.stream_callback = None
-        if llm is not None:
-            llm.reasoning_callback = None
         if reasoning_msg is not None:
             await reasoning_msg.update()
         for cl_step in active_steps.values():
-            cl_step.output = "任务中断，未收到步骤完成回调。"
+            cl_step.output = _message_ui_content("execute", "任务中断，未收到步骤完成回调。")
             await cl_step.__aexit__(None, None, None)
         active_steps.clear()
 
@@ -506,6 +513,7 @@ async def main(message: cl.Message):
     elif report_text:
         await _stream_text_message(
             report_text,
+            kind="result",
             metadata=_message_ui_metadata("result"),
             tags=[UI_TAG_RESULT],
         )
@@ -514,7 +522,7 @@ async def main(message: cl.Message):
         file_list = "\n".join(file_descriptions)
         heading = "**可下载的文件：**" if report_text else "**分析完成，可下载的文件：**"
         await cl.Message(
-            content=f"{heading}\n{file_list}",
+            content=_message_ui_content("artifact", f"{heading}\n{file_list}"),
             elements=elements,
             metadata=_message_ui_metadata("artifact"),
             tags=[UI_TAG_ARTIFACT],
@@ -522,8 +530,8 @@ async def main(message: cl.Message):
 
     for title, preview_element in table_previews:
         await cl.Message(
-            content=title,
+            content=_message_ui_content("preview", title),
             elements=[preview_element],
-            metadata=_message_ui_metadata("artifact"),
-            tags=[UI_TAG_ARTIFACT],
+            metadata=_message_ui_metadata("preview"),
+            tags=[UI_TAG_PREVIEW],
         ).send()

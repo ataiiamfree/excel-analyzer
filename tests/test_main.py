@@ -5,6 +5,7 @@ from app.agent.plan import Step
 from app.main import (
     _format_plan_for_ui,
     _format_step_result_for_ui,
+    _message_ui_content,
     _message_ui_metadata,
     _mime_for_path,
     _report_for_ui,
@@ -86,3 +87,11 @@ def test_format_step_result_for_ui_includes_stdout_files_and_script():
 
 def test_message_ui_metadata_marks_visual_kind():
     assert _message_ui_metadata("reasoning") == {"cx_kind": "reasoning"}
+
+
+def test_message_ui_content_embeds_hidden_kind_marker():
+    content = _message_ui_content("reasoning", "过程")
+
+    assert 'class="cx-ui-marker"' in content
+    assert 'data-cx-kind="reasoning"' in content
+    assert content.endswith("\n过程")

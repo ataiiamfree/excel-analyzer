@@ -11,6 +11,7 @@ from typing import Literal
 import httpx
 
 logger = logging.getLogger(__name__)
+ReasoningCallback = Callable[[str], Awaitable[None]]
 
 
 class LLMError(RuntimeError):
@@ -40,7 +41,6 @@ class LLMClient:
         self.effort = effort
         self.timeout = timeout
         self._client: httpx.AsyncClient | None = None
-        self.reasoning_callback: Callable[[str], Awaitable[None]] | None = None
 
     async def _get_client(self) -> httpx.AsyncClient:
         if self._client is None or self._client.is_closed:
@@ -54,14 +54,16 @@ class LLMClient:
         max_tokens: int = 8000,
         temperature: float = 0.1,
         thinking: bool | None = None,
+        reasoning_callback: ReasoningCallback | None = None,
     ) -> str:
-        if self.reasoning_callback:
+        if reasoning_callback:
             chunks: list[str] = []
             async for event in self.stream_events(
                 prompt,
                 max_tokens=max_tokens,
                 temperature=temperature,
                 thinking=thinking,
+                reasoning_callback=reasoning_callback,
             ):
                 if event.kind == "content":
                     chunks.append(event.text)
@@ -101,8 +103,8 @@ class LLMClient:
             raise LLMError(f"LLM 响应缺少 choices: {data}")
         message = choices[0].get("message", {})
         reasoning_content = message.get("reasoning_content") or ""
-        if reasoning_content and self.reasoning_callback:
-            await self.reasoning_callback(reasoning_content)
+        if reasoning_content and reasoning_callback:
+            await reasoning_callback(reasoning_content)
         content = message.get("content") or ""
         if not content.strip() and message.get("reasoning_content"):
             logger.warning("LLM response only contained reasoning_content; ignoring it as executable output")
@@ -118,6 +120,7 @@ class LLMClient:
         max_tokens: int = 8000,
         temperature: float = 0.1,
         thinking: bool | None = None,
+        reasoning_callback: ReasoningCallback | None = None,
     ) -> AsyncIterator[str]:
         """Stream chat completion content chunks from an OpenAI-compatible API."""
         async for event in self.stream_events(
@@ -125,6 +128,7 @@ class LLMClient:
             max_tokens=max_tokens,
             temperature=temperature,
             thinking=thinking,
+            reasoning_callback=reasoning_callback,
         ):
             if event.kind == "content":
                 yield event.text
@@ -135,6 +139,7 @@ class LLMClient:
         max_tokens: int = 8000,
         temperature: float = 0.1,
         thinking: bool | None = None,
+        reasoning_callback: ReasoningCallback | None = None,
     ) -> AsyncIterator[LLMStreamEvent]:
         """Stream content and reasoning events from an OpenAI-compatible API."""
         payload = self._build_payload(prompt, max_tokens, temperature, thinking, stream=True)
@@ -145,7 +150,8 @@ class LLMClient:
         logger.info("LLM 流式请求: model=%s, prompt=%d chars, max_tokens=%d",
                     self.model, len(prompt), max_tokens)
         client = await self._get_client()
-        streamed_chars = 0
+        content_chars = 0
+        reasoning_chars = 0
         try:
             async with client.stream(
                 "POST",
@@ -163,18 +169,21 @@ class LLMClient:
                         continue
                     if event == "[DONE]":
                         break
-                    streamed_chars += len(event.text)
-                    if event.kind == "reasoning" and self.reasoning_callback:
-                        await self.reasoning_callback(event.text)
+                    if event.kind == "content":
+                        content_chars += len(event.text)
+                    else:
+                        reasoning_chars += len(event.text)
+                    if event.kind == "reasoning" and reasoning_callback:
+                        await reasoning_callback(event.text)
                     yield event
         except LLMError:
             raise
         except httpx.RequestError as exc:
             raise LLMError(f"LLM 流式请求失败: {exc}") from exc
 
-        if streamed_chars <= 0:
-            raise LLMError("LLM 流式响应为空")
-        logger.info("LLM 流式响应完成: %d chars", streamed_chars)
+        if content_chars <= 0:
+            raise LLMError(f"LLM 流式响应缺少 content: reasoning_chars={reasoning_chars}")
+        logger.info("LLM 流式响应完成: content=%d chars, reasoning=%d chars", content_chars, reasoning_chars)
 
     def _parse_stream_line(self, line: str) -> str | None:
         event = self._parse_stream_event(line)

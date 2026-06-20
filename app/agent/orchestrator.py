@@ -90,7 +90,11 @@ class TaskResult:
     error_summary: str = ""
 
 
-Executor = Callable[[Step, TaskContext, Any], Awaitable[StepResult]]
+StepStartCallback = Callable[[Step, int, int], Awaitable[None]]
+StepEndCallback = Callable[[Step, StepResult], Awaitable[None]]
+PlanReadyCallback = Callable[[ExecutionPlan], Awaitable[None]]
+TokenCallback = Callable[[str], Awaitable[None]]
+Executor = Callable[[Step, TaskContext, Any, TokenCallback | None], Awaitable[StepResult]]
 
 
 class Orchestrator:
@@ -114,9 +118,11 @@ class Orchestrator:
         query: str,
         session: Session,
         *,
-        on_step_start: Callable[[Step], Awaitable[None]] | None = None,
-        on_step_end: Callable[[Step, StepResult], Awaitable[None]] | None = None,
-        on_plan_ready: Callable[[ExecutionPlan], Awaitable[None]] | None = None,
+        on_step_start: StepStartCallback | None = None,
+        on_step_end: StepEndCallback | None = None,
+        on_plan_ready: PlanReadyCallback | None = None,
+        on_report_token: TokenCallback | None = None,
+        on_reasoning_token: TokenCallback | None = None,
     ) -> TaskResult:
         """Full pipeline: Ingest → Preprocess → Profile → Plan → Execute → Report.
 
@@ -185,9 +191,15 @@ class Orchestrator:
             await on_plan_ready(plan)
 
         # 执行
-        self._on_step_start = on_step_start
-        self._on_step_end = on_step_end
-        result = await self.run_plan(plan, context, workspace)
+        result = await self.run_plan(
+            plan,
+            context,
+            workspace,
+            on_step_start=on_step_start,
+            on_step_end=on_step_end,
+            on_report_token=on_report_token,
+            on_reasoning_token=on_reasoning_token,
+        )
 
         # 更新 session（含结果摘要，供追问使用）
         session.update_after_task(
@@ -402,6 +414,11 @@ class Orchestrator:
         plan: ExecutionPlan,
         context: TaskContext,
         workspace: Any,
+        *,
+        on_step_start: StepStartCallback | None = None,
+        on_step_end: StepEndCallback | None = None,
+        on_report_token: TokenCallback | None = None,
+        on_reasoning_token: TokenCallback | None = None,
     ) -> TaskResult:
         context.plan = plan
         while True:
@@ -419,15 +436,21 @@ class Orchestrator:
             total_steps = len(plan.steps)
             logger.info("▶ 执行 Step %s [%d/%d] [%s]: %s", step.id, step_index, total_steps, step.tool, step.description)
 
-            on_start = getattr(self, "_on_step_start", None)
-            if on_start:
-                await on_start(step, step_index, total_steps)
+            if on_step_start:
+                await on_step_start(step, step_index, total_steps)
 
-            result = await self._execute_step(step, context, workspace)
+            result = await self._execute_step(step, context, workspace, on_reasoning_token)
             check = self.tools.checker.validate(step, result, context, workspace)
 
             if check.status == "failed" and not result.retries_exhausted:
-                result = await self._repair_from_check(step, result, check, context, workspace)
+                result = await self._repair_from_check(
+                    step,
+                    result,
+                    check,
+                    context,
+                    workspace,
+                    on_reasoning_token,
+                )
                 check = self.tools.checker.validate(step, result, context, workspace)
 
             if result.failed or check.status == "failed":
@@ -471,9 +494,8 @@ class Orchestrator:
             plan.mark_done(step.id, check=check.status)
             workspace.save_json("plan.json", plan.to_dict())
 
-            on_end = getattr(self, "_on_step_end", None)
-            if on_end:
-                await on_end(step, result)
+            if on_step_end:
+                await on_step_end(step, result)
 
             # Adaptive: 根据结果动态调整后续计划
             if self._should_adapt(step, result, plan.remaining_steps()):
@@ -484,7 +506,12 @@ class Orchestrator:
         # 生成报告（有 outline 时分章节 LLM 调用，无 outline 时简单汇总）
         logger.info("所有步骤执行完毕，开始生成报告...")
         try:
-            report = await self.reporter.generate(context, workspace)
+            report = await self.reporter.generate(
+                context,
+                workspace,
+                stream_callback=on_report_token,
+                reasoning_callback=on_reasoning_token,
+            )
             logger.info("报告生成完成, 长度=%d chars", len(report))
         except Exception:
             logger.exception("Reporter 生成报告失败，降级为简单汇总")
@@ -504,7 +531,13 @@ class Orchestrator:
         workspace.write_state(status="completed", current_step=None)
         return TaskResult(report=report, files=self._absolute_output_files(workspace))
 
-    async def _execute_step(self, step: Step, context: TaskContext, workspace: Any) -> StepResult:
+    async def _execute_step(
+        self,
+        step: Step,
+        context: TaskContext,
+        workspace: Any,
+        reasoning_callback: TokenCallback | None = None,
+    ) -> StepResult:
         executor = self.executors.get(step.tool)
         if executor is None:
             return StepResult(
@@ -515,7 +548,7 @@ class Orchestrator:
                 retries_exhausted=True,
             )
         try:
-            return await executor(step, context, workspace)
+            return await executor(step, context, workspace, reasoning_callback)
         except Exception as exc:
             logger.exception("步骤执行异常: %s", step.id)
             return StepResult(
@@ -527,16 +560,28 @@ class Orchestrator:
             )
 
     async def _execute_knowledge(
-        self, step: Step, context: TaskContext, workspace: Any
+        self,
+        step: Step,
+        context: TaskContext,
+        workspace: Any,
+        reasoning_callback: TokenCallback | None = None,
     ) -> StepResult:
         chunks = self.tools.knowledge.search(step.instruction, top_k=3)
         return StepResult(stdout=str(chunks), files=[])
 
     async def _execute_python(
-        self, step: Step, context: TaskContext, workspace: Any
+        self,
+        step: Step,
+        context: TaskContext,
+        workspace: Any,
+        reasoning_callback: TokenCallback | None = None,
     ) -> StepResult:
         prompt = self.assembler.assemble(context, step)
-        code_response = await self.llm.call(prompt, max_tokens=16000)
+        code_response = await self.llm.call(
+            prompt,
+            max_tokens=16000,
+            reasoning_callback=reasoning_callback,
+        )
         code = self._extract_code_block(code_response)
         exec_result = self.tools.sandbox.execute(
             code=code,
@@ -553,7 +598,9 @@ class Orchestrator:
             repair_prompt = self.assembler.assemble_repair(
                 context, step, code, exec_result.stderr
             )
-            code = self._extract_code_block(await self.llm.call(repair_prompt))
+            code = self._extract_code_block(
+                await self.llm.call(repair_prompt, reasoning_callback=reasoning_callback)
+            )
             exec_result = self.tools.sandbox.execute(
                 code=code,
                 workdir=workspace.path,
@@ -579,6 +626,7 @@ class Orchestrator:
         check: CheckResult,
         context: TaskContext,
         workspace: Any,
+        reasoning_callback: TokenCallback | None = None,
     ) -> StepResult:
         script_text = workspace.read_text(result.script_path) if result.script_path else ""
         repair_prompt = self.assembler.assemble_repair(
@@ -588,7 +636,9 @@ class Orchestrator:
             stderr=result.error,
             check_report=check.to_prompt_text(),
         )
-        code = self._extract_code_block(await self.llm.call(repair_prompt))
+        code = self._extract_code_block(
+            await self.llm.call(repair_prompt, reasoning_callback=reasoning_callback)
+        )
         exec_result = self.tools.sandbox.execute(
             code=code,
             workdir=workspace.path,

@@ -21,16 +21,21 @@ class Reporter:
     def __init__(self, llm_client: Any):
         self.llm = llm_client
         self._system_prompt = self._load_system_prompt()
-        self.stream_callback: TokenCallback | None = None
 
-    async def generate(self, context: TaskContext, workspace: Any) -> str:
+    async def generate(
+        self,
+        context: TaskContext,
+        workspace: Any,
+        *,
+        stream_callback: TokenCallback | None = None,
+        reasoning_callback: TokenCallback | None = None,
+    ) -> str:
         """Generate the full report.  Returns Markdown text."""
         outline = (context.plan.report_outline if context.plan else None) or []
         if not outline:
             return self._assemble_simple_response(context, workspace)
 
         sections: list[str] = []
-        stream_callback = self.stream_callback
         if stream_callback:
             await self._emit(stream_callback, self._build_report_preamble(outline, context))
 
@@ -50,7 +55,7 @@ class Reporter:
                     stream_callback,
                     self._build_section_heading(index + 1, chapter),
                 )
-            section_text = await self._generate_section(prompt, stream_callback)
+            section_text = await self._generate_section(prompt, stream_callback, reasoning_callback)
             sections.append(section_text)
 
         return self._assemble_full_report(sections, outline, context, workspace)
@@ -59,17 +64,26 @@ class Reporter:
         self,
         prompt: str,
         stream_callback: TokenCallback | None,
+        reasoning_callback: TokenCallback | None,
     ) -> str:
         stream = getattr(self.llm, "stream", None)
         if stream_callback and callable(stream):
             chunks: list[str] = []
-            async for token in stream(prompt, max_tokens=3000):
+            async for token in stream(
+                prompt,
+                max_tokens=3000,
+                reasoning_callback=reasoning_callback,
+            ):
                 chunks.append(token)
                 await self._emit(stream_callback, token)
             await self._emit(stream_callback, "\n")
             return "".join(chunks)
 
-        section_text = await self.llm.call(prompt, max_tokens=3000)
+        section_text = await self.llm.call(
+            prompt,
+            max_tokens=3000,
+            reasoning_callback=reasoning_callback,
+        )
         await self._emit(stream_callback, section_text + "\n")
         return section_text
 

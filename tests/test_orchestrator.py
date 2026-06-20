@@ -67,7 +67,7 @@ class CancelWorkspace(FakeWorkspace):
 
 
 class FailingOrchestrator(Orchestrator):
-    async def _execute_step(self, step, context, workspace):
+    async def _execute_step(self, step, context, workspace, reasoning_callback=None):
         return StepResult(
             stdout="",
             files=[],
@@ -78,7 +78,7 @@ class FailingOrchestrator(Orchestrator):
 
 
 class SuccessOrchestrator(Orchestrator):
-    async def _execute_step(self, step, context, workspace):
+    async def _execute_step(self, step, context, workspace, reasoning_callback=None):
         return StepResult(stdout="分析完成: 总计 100 行", files=[])
 
 
@@ -223,7 +223,7 @@ class AdaptOrchestrator(Orchestrator):
         super().__init__(*args, **kwargs)
         self._step_count = 0
 
-    async def _execute_step(self, step, context, workspace):
+    async def _execute_step(self, step, context, workspace, reasoning_callback=None):
         self._step_count += 1
         if step.id == "s1":
             return StepResult(stdout="发现平均时长 42 天，标准差 28 天", files=[])
@@ -379,7 +379,7 @@ def test_reporter_failure_falls_back_to_simple_response():
 class OutputFilesOrchestrator(Orchestrator):
     """步骤返回 output_files，用于测试自动注册。"""
 
-    async def _execute_step(self, step, context, workspace):
+    async def _execute_step(self, step, context, workspace, reasoning_callback=None):
         return StepResult(
             stdout="生成图表完成",
             files=["output/趋势图.png", "output/汇总.xlsx", "output/data.csv"],
@@ -555,7 +555,7 @@ def test_extract_code_block_rejects_empty_response_as_python():
 
 def test_execute_step_catches_executor_exception():
     class ExplodingOrchestrator(Orchestrator):
-        async def _execute_python(self, step, context, workspace):
+        async def _execute_python(self, step, context, workspace, reasoning_callback=None):
             raise RuntimeError("LLM 响应为空")
 
     step = Step(id="s1", tool="python", description="x", instruction="x")
@@ -597,10 +597,15 @@ def test_step_callbacks_called():
     async def on_end(step, result):
         ended.append(step.id)
 
-    orch._on_step_start = on_start
-    orch._on_step_end = on_end
-
-    asyncio.run(orch.run_plan(plan, context, workspace))
+    asyncio.run(
+        orch.run_plan(
+            plan,
+            context,
+            workspace,
+            on_step_start=on_start,
+            on_step_end=on_end,
+        )
+    )
 
     assert started == ["s1"]
     assert ended == ["s1"]
