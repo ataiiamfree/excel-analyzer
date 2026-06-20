@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef } from "react";
-import { useLocation, useParams } from "react-router-dom";
+import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { fetchArtifacts, fetchConversation, fetchConversations, fetchMessages } from "../api/http";
@@ -12,12 +12,32 @@ interface LocationState {
   initialQuery?: string;
 }
 
+const INITIAL_QUERY_MARK = "chatexcel.initial-query.";
+
+function wasInitialQueryConsumed(conversationId: string): boolean {
+  try {
+    return window.sessionStorage.getItem(`${INITIAL_QUERY_MARK}${conversationId}`) === "sent";
+  } catch {
+    return false;
+  }
+}
+
+function markInitialQueryConsumed(conversationId: string): void {
+  try {
+    window.sessionStorage.setItem(`${INITIAL_QUERY_MARK}${conversationId}`, "sent");
+  } catch {
+    // sessionStorage can be unavailable in hardened browser modes; history cleanup still prevents refresh replays.
+  }
+}
+
 export default function ConversationPage() {
   const { conversationId = "" } = useParams();
   const location = useLocation();
+  const navigate = useNavigate();
   const queryClient = useQueryClient();
   const sentInitial = useRef(false);
   const state = (location.state ?? {}) as LocationState;
+  const initialQuery = state.initialQuery?.trim() ?? "";
 
   const conversations = useQuery({ queryKey: ["conversations"], queryFn: fetchConversations });
   const conversation = useQuery({
@@ -37,6 +57,11 @@ export default function ConversationPage() {
     refetchInterval: 2500
   });
   const stream = useConversationStream(conversationId);
+  const persistedMessageCount = messages.data?.length ?? 0;
+
+  useEffect(() => {
+    sentInitial.current = false;
+  }, [conversationId]);
 
   useEffect(() => {
     if (stream.livePayload?.status === "done" || stream.livePayload?.status === "failed") {
@@ -47,11 +72,28 @@ export default function ConversationPage() {
   }, [conversationId, queryClient, stream.livePayload?.status]);
 
   useEffect(() => {
-    if (!sentInitial.current && state.initialQuery && stream.status === "open") {
-      sentInitial.current = true;
-      stream.sendMessage(state.initialQuery);
+    if (!initialQuery || sentInitial.current || !messages.isFetched || stream.status !== "open") {
+      return;
     }
-  }, [state.initialQuery, stream]);
+
+    sentInitial.current = true;
+    navigate(`/c/${conversationId}`, { replace: true, state: null });
+
+    if (persistedMessageCount > 0 || wasInitialQueryConsumed(conversationId)) {
+      return;
+    }
+
+    markInitialQueryConsumed(conversationId);
+    stream.sendMessage(initialQuery);
+  }, [
+    conversationId,
+    initialQuery,
+    messages.isFetched,
+    navigate,
+    persistedMessageCount,
+    stream.sendMessage,
+    stream.status
+  ]);
 
   const allArtifacts = artifacts.data ?? [];
   const livePayload = stream.livePayload?.status === "running" ? stream.livePayload : null;

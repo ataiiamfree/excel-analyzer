@@ -11,14 +11,19 @@ interface ThreadProps {
 }
 
 export default function Thread({ messages, livePayload, artifacts }: ThreadProps) {
-  const endRef = useRef<HTMLDivElement | null>(null);
+  const threadRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
-    endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+    const thread = threadRef.current;
+    if (!thread) return;
+
+    window.requestAnimationFrame(() => {
+      thread.scrollTo({ top: thread.scrollHeight, behavior: "smooth" });
+    });
   }, [messages.length, livePayload?.report, livePayload?.steps.length]);
 
   return (
-    <div className="thread" id="thread">
+    <div className="thread" id="thread" ref={threadRef}>
       <div className="thread-inner">
         <div className="day-rule">
           <span>今天 · {new Date().toLocaleDateString("zh-CN")}</span>
@@ -38,7 +43,6 @@ export default function Thread({ messages, livePayload, artifacts }: ThreadProps
         {livePayload && livePayload.status === "running" ? (
           <MessageAssistant payload={livePayload} artifacts={artifacts} live />
         ) : null}
-        <div ref={endRef} />
       </div>
     </div>
   );

@@ -17,7 +17,10 @@ export default function HomePage() {
       return createConversation(file, query);
     },
     onSuccess: (conversation) => {
-      navigate(`/c/${conversation.id}`, { state: { initialQuery: query.trim() } });
+      const initialQuery = query.trim();
+      navigate(`/c/${conversation.id}`, {
+        state: initialQuery ? { initialQuery } : null
+      });
     }
   });
 
