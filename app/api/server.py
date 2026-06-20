@@ -60,6 +60,7 @@ async def conversation_ws(websocket: WebSocket, conversation_id: str) -> None:
                     sessions=sessions,
                     conversation_id=conversation_id,
                     query=event.content,
+                    client_msg_id=event.client_msg_id,
                     sender=send,
                 )
     except WebSocketDisconnect:

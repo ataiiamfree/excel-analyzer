@@ -112,6 +112,7 @@ async def run_conversation_query(
     sessions: SessionRegistry,
     conversation_id: str,
     query: str,
+    client_msg_id: str | None = None,
     sender: EventSender | None = None,
 ) -> RunResult:
     conversation = store.get_conversation(conversation_id)
@@ -121,6 +122,7 @@ async def run_conversation_query(
         config=config,
         session=session,
         query=query,
+        client_msg_id=client_msg_id,
         sender=sender,
         conversation_id=conversation_id,
         persist_messages=True,
@@ -142,6 +144,7 @@ async def run_ephemeral_query(
         config=config,
         session=session,
         query=query,
+        client_msg_id=None,
         sender=sender,
         conversation_id=None,
         persist_messages=False,
@@ -154,6 +157,7 @@ async def _run_query(
     config: Config,
     session: Session,
     query: str,
+    client_msg_id: str | None,
     sender: EventSender | None,
     conversation_id: str | None,
     persist_messages: bool,
@@ -174,7 +178,7 @@ async def _run_query(
         user = store.create_message(
             conversation_id=conversation_id,
             role="user",
-            payload={"text": query, "attached_file": attached_file},
+            payload={"text": query, "attached_file": attached_file, "client_msg_id": client_msg_id},
         )
         user_message_id = user["id"]
         store.create_message(

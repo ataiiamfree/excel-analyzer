@@ -33,6 +33,7 @@ export interface Message {
 
 export interface UserMessagePayload {
   text: string;
+  client_msg_id?: string | null;
   attached_file?: {
     name?: string | null;
     size?: number | null;

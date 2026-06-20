@@ -4,7 +4,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { fetchArtifacts, fetchConversation, fetchConversations, fetchMessages } from "../api/http";
 import { useConversationStream } from "../api/ws";
-import type { AssistantMessagePayload } from "../api/types";
+import type { AssistantMessagePayload, Message, UserMessagePayload } from "../api/types";
 import AppShell from "../layout/AppShell";
 import Composer from "../chat/Composer";
 import Thread from "../chat/Thread";
@@ -29,6 +29,22 @@ function markInitialQueryConsumed(conversationId: string): void {
   } catch {
     // sessionStorage can be unavailable in hardened browser modes; history cleanup still prevents refresh replays.
   }
+}
+
+function isSameUserMessage(message: Message, pending: Message): boolean {
+  if (message.role !== "user") {
+    return false;
+  }
+
+  const payload = message.payload as UserMessagePayload;
+  const pendingPayload = pending.payload as UserMessagePayload;
+  if (payload.client_msg_id && payload.client_msg_id === pendingPayload.client_msg_id) {
+    return true;
+  }
+
+  const createdAt = Date.parse(message.created_at);
+  const pendingAt = Date.parse(pending.created_at);
+  return payload.text === pendingPayload.text && Math.abs(createdAt - pendingAt) < 60_000;
 }
 
 export default function ConversationPage() {
@@ -99,6 +115,13 @@ export default function ConversationPage() {
   const allArtifacts = artifacts.data ?? [];
   const livePayload = stream.livePayload?.status === "running" ? stream.livePayload : null;
   const hydratedMessages = useMemo(() => messages.data ?? [], [messages.data]);
+  const displayedMessages = useMemo(() => {
+    if (!stream.pendingUserMessage) {
+      return hydratedMessages;
+    }
+    const pendingPersisted = hydratedMessages.some((message) => isSameUserMessage(message, stream.pendingUserMessage!));
+    return pendingPersisted ? hydratedMessages : [...hydratedMessages, stream.pendingUserMessage];
+  }, [hydratedMessages, stream.pendingUserMessage]);
   const persistedNextActions = useMemo(() => {
     const latestAssistant = [...hydratedMessages]
       .reverse()
@@ -114,7 +137,7 @@ export default function ConversationPage() {
 
   return (
     <AppShell conversation={conversation.data} groups={conversations.data?.groups ?? []} artifacts={allArtifacts}>
-      <Thread messages={hydratedMessages} livePayload={livePayload} artifacts={allArtifacts} />
+      <Thread messages={displayedMessages} livePayload={livePayload} artifacts={allArtifacts} />
       <Composer
         disabled={stream.status !== "open" || stream.livePayload?.status === "running"}
         nextActions={nextActions}

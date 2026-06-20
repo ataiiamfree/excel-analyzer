@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 
-import type { Artifact, AssistantMessagePayload, Message } from "../api/types";
+import type { Artifact, AssistantMessagePayload, Message, UserMessagePayload } from "../api/types";
 import MessageAssistant from "./MessageAssistant";
 import MessageUser from "./MessageUser";
 
@@ -30,7 +30,7 @@ export default function Thread({ messages, livePayload, artifacts }: ThreadProps
         </div>
         {messages.map((message) =>
           message.role === "user" ? (
-            <MessageUser key={message.id} payload={message.payload as never} />
+            <MessageUser key={message.id} payload={message.payload as UserMessagePayload} />
           ) : (
             <MessageAssistant
               key={message.id}

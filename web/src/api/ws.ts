@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import type { AssistantMessagePayload, ServerEvent } from "./types";
+import type { AssistantMessagePayload, Message, ServerEvent } from "./types";
 
 function initialPayload(query = ""): AssistantMessagePayload {
   return {
@@ -104,6 +104,7 @@ export function useConversationStream(conversationId: string) {
   const socketRef = useRef<WebSocket | null>(null);
   const [status, setStatus] = useState<"connecting" | "open" | "closed">("connecting");
   const [livePayload, setLivePayload] = useState<AssistantMessagePayload | null>(null);
+  const [pendingUserMessage, setPendingUserMessage] = useState<Message | null>(null);
 
   const wsUrl = useMemo(() => {
     const proto = window.location.protocol === "https:" ? "wss" : "ws";
@@ -112,6 +113,7 @@ export function useConversationStream(conversationId: string) {
 
   useEffect(() => {
     setLivePayload(null);
+    setPendingUserMessage(null);
     setStatus("connecting");
     const ws = new WebSocket(wsUrl);
     socketRef.current = ws;
@@ -131,19 +133,33 @@ export function useConversationStream(conversationId: string) {
   }, [wsUrl]);
 
   const sendMessage = useCallback((content: string) => {
-    setLivePayload(initialPayload(content));
-    socketRef.current?.send(
+    const text = content.trim();
+    const socket = socketRef.current;
+    if (!text || socket?.readyState !== WebSocket.OPEN) {
+      return;
+    }
+
+    const clientMsgId = crypto.randomUUID();
+    setPendingUserMessage({
+      id: `pending-${clientMsgId}`,
+      conversation_id: conversationId,
+      role: "user",
+      created_at: new Date().toISOString(),
+      payload: { text, client_msg_id: clientMsgId }
+    });
+    setLivePayload(initialPayload(text));
+    socket.send(
       JSON.stringify({
         type: "user_message",
-        content,
-        client_msg_id: crypto.randomUUID()
+        content: text,
+        client_msg_id: clientMsgId
       })
     );
-  }, []);
+  }, [conversationId]);
 
   const cancel = useCallback(() => {
     socketRef.current?.send(JSON.stringify({ type: "cancel" }));
   }, []);
 
-  return { status, livePayload, sendMessage, cancel };
+  return { status, livePayload, pendingUserMessage, sendMessage, cancel };
 }

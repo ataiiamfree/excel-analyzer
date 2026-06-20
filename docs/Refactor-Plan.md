@@ -165,6 +165,8 @@ class Artifact(Base):
 { "type": "cancel" }
 ```
 
+`client_msg_id` 由前端生成并写入用户消息 payload，用于追问发送后的本地 pending 气泡与后端历史回放去重。
+
 **服务端 → 客户端**（事件流，所有事件都有 `seq` 单调递增）：
 
 ```ts
@@ -439,6 +441,7 @@ web/
 - `useConversationStream(conversationId)` 内部维护：
   - WS 连接（带 reconnect 退避）
   - `assistantMessageBuffer`：本次 run 的累积 payload
+  - `pendingUserMessage`：用户追问发送后立即展示的本地消息，等 `/messages` 回放同一 `client_msg_id` 后去重
   - 收到事件后用 reducer 把 buffer 推进，组件订阅它即可流式渲染
 - 一次 run 结束后，把最终 payload 通过 TanStack Query 的 `setQueryData` 写入 `["conversations", id, "messages"]` 缓存，刷新页面无需重拉。
 
