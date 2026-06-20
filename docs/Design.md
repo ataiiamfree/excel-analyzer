@@ -32,6 +32,7 @@
 - **Adaptive Plan-Execute 编排**：先粗略规划全局，每步执行后根据实际结果动态细化下一步（详见 Implementation-Plan.md 第〇章）
 - **只流式输出用户可见内容**：最终报告章节和简短结论通过 Chainlit 流式展示；DeepSeek 返回的 reasoning_content 单独展示为“DeepSeek 思考”，不混入报告正文
 - **Plan-Execute 过程可见**：规划完成后在 UI 展示执行计划；每个 Execute 步骤用可展开步骤展示输入、stdout 摘要、脚本路径和产物
+- **过程与结果视觉分层**：Chainlit 消息通过 `metadata/tags` 和前端 class 标记区分思考、进度、执行计划、Execute 步骤、最终结果与附件预览；思考内容使用更小、更灰的辅助样式，最终结果保持正式答案样式
 - **结果型任务单脚本优先**：普通 Excel 分析、导出、画图任务默认合并为一个 Python 步骤，避免多步重复生成大段代码
 - **原始文件不可变**：永远保留 raw workbook，所有清洗、拆表、派生字段都写入新的 normalized/artifact 文件
 - **结果先校验再报告**：代码跑通不等于分析正确，关键步骤必须经过结构化结果检查
@@ -1685,9 +1686,19 @@ async def main(message: cl.Message):
             step.output = result.summary
 
     # 展示执行计划和每个 Execute 步骤；步骤完成后显示 stdout 摘要、脚本路径和产物。
-    await cl.Message(content=format_plan(plan)).send()
+    # 不同消息类型会写入 metadata/tags，并由 public/chat_excel.js + CSS 做视觉分层。
+    await cl.Message(
+        content=format_plan(plan),
+        metadata={"cx_kind": "plan"},
+        tags=["cx-plan"],
+    ).send()
     for step in plan.steps:
-        async with cl.Step(name=step.description) as step_panel:
+        async with cl.Step(
+            name=step.description,
+            type="tool",
+            metadata={"cx_kind": "execute"},
+            tags=["cx-execute"],
+        ) as step_panel:
             step_panel.input = step.instruction
             result = await run_step(step)
             step_panel.output = summarize_step_result(result)

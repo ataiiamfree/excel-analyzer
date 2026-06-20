@@ -58,6 +58,12 @@ MAX_TABLE_PREVIEWS = 1
 TABLE_PREVIEW_ROWS = 50
 TABLE_PREVIEW_COLS = 24
 MAX_REASONING_UI_CHARS = 12000
+UI_TAG_REASONING = "cx-reasoning"
+UI_TAG_PROGRESS = "cx-progress"
+UI_TAG_PLAN = "cx-plan"
+UI_TAG_EXECUTE = "cx-execute"
+UI_TAG_RESULT = "cx-result"
+UI_TAG_ARTIFACT = "cx-artifact"
 UPLOAD_HELP = (
     "把 Excel 文件拖到这里，或点击选择文件。支持 `.xlsx` / `.xlsm`，单个文件不超过 100MB。"
 )
@@ -159,9 +165,14 @@ def _table_preview_for_path(path: str) -> pd.DataFrame | None:
     return df
 
 
-async def _stream_text_message(text: str) -> cl.Message:
+async def _stream_text_message(
+    text: str,
+    *,
+    metadata: dict[str, str] | None = None,
+    tags: list[str] | None = None,
+) -> cl.Message:
     """Stream already assembled text so short responses use the same UI path."""
-    msg = cl.Message(content="")
+    msg = cl.Message(content="", metadata=metadata, tags=tags)
     await msg.send()
     for chunk in _chunk_text_for_stream(text):
         await msg.stream_token(chunk)
@@ -171,6 +182,10 @@ async def _stream_text_message(text: str) -> cl.Message:
 
 def _chunk_text_for_stream(text: str, chunk_size: int = 32) -> list[str]:
     return [text[index:index + chunk_size] for index in range(0, len(text), chunk_size)]
+
+
+def _message_ui_metadata(kind: str) -> dict[str, str]:
+    return {"cx_kind": kind}
 
 
 def _format_plan_for_ui(steps: list[Step]) -> str:
@@ -327,7 +342,11 @@ async def main(message: cl.Message):
         if not token:
             return
         if report_msg is None:
-            report_msg = cl.Message(content="")
+            report_msg = cl.Message(
+                content="",
+                metadata=_message_ui_metadata("result"),
+                tags=[UI_TAG_RESULT],
+            )
             await report_msg.send()
         await report_msg.stream_token(token)
 
@@ -336,7 +355,11 @@ async def main(message: cl.Message):
         if not token or reasoning_truncated:
             return
         if reasoning_msg is None:
-            reasoning_msg = cl.Message(content="**DeepSeek 思考**\n\n")
+            reasoning_msg = cl.Message(
+                content="**DeepSeek 思考**\n\n",
+                metadata=_message_ui_metadata("reasoning"),
+                tags=[UI_TAG_REASONING],
+            )
             await reasoning_msg.send()
 
         remaining = MAX_REASONING_UI_CHARS - reasoning_chars
@@ -360,11 +383,19 @@ async def main(message: cl.Message):
         llm.reasoning_callback = on_reasoning_token
 
     # Progress callbacks — update a single status message in place
-    progress_msg = cl.Message(content=f"正在分析 **{current_file}**...")
+    progress_msg = cl.Message(
+        content=f"正在分析 **{current_file}**...",
+        metadata=_message_ui_metadata("progress"),
+        tags=[UI_TAG_PROGRESS],
+    )
     await progress_msg.send()
 
     async def on_plan_ready(plan):
-        await cl.Message(content=_format_plan_for_ui(plan.steps)).send()
+        await cl.Message(
+            content=_format_plan_for_ui(plan.steps),
+            metadata=_message_ui_metadata("plan"),
+            tags=[UI_TAG_PLAN],
+        ).send()
 
     async def on_step_start(step: Step, step_index: int = 0, total_steps: int = 0):
         if total_steps > 1:
@@ -373,7 +404,13 @@ async def main(message: cl.Message):
             progress_msg.content = f"正在分析 **{current_file}**... {step.description}"
         await progress_msg.update()
         step_title = f"[{step_index}/{total_steps}] {step.description}" if total_steps > 0 else step.description
-        cl_step = cl.Step(name=step_title or step.id)
+        cl_step = cl.Step(
+            name=step_title or step.id,
+            type="tool",
+            metadata=_message_ui_metadata("execute"),
+            tags=[UI_TAG_EXECUTE],
+            show_input="markdown",
+        )
         cl_step.input = step.instruction or step.description
         await cl_step.__aenter__()
         active_steps[step.id] = cl_step
@@ -381,7 +418,11 @@ async def main(message: cl.Message):
     async def on_step_end(step: Step, result: StepResult):
         cl_step = active_steps.pop(step.id, None)
         if cl_step is None:
-            await cl.Message(content=_format_step_result_for_ui(step, result)).send()
+            await cl.Message(
+                content=_format_step_result_for_ui(step, result),
+                metadata=_message_ui_metadata("execute"),
+                tags=[UI_TAG_EXECUTE],
+            ).send()
             return
         cl_step.output = _format_step_result_for_ui(step, result)
         await cl_step.__aexit__(None, None, None)
@@ -463,12 +504,26 @@ async def main(message: cl.Message):
     if report_msg is not None:
         await report_msg.update()
     elif report_text:
-        await _stream_text_message(report_text)
+        await _stream_text_message(
+            report_text,
+            metadata=_message_ui_metadata("result"),
+            tags=[UI_TAG_RESULT],
+        )
 
     if elements:
         file_list = "\n".join(file_descriptions)
         heading = "**可下载的文件：**" if report_text else "**分析完成，可下载的文件：**"
-        await cl.Message(content=f"{heading}\n{file_list}", elements=elements).send()
+        await cl.Message(
+            content=f"{heading}\n{file_list}",
+            elements=elements,
+            metadata=_message_ui_metadata("artifact"),
+            tags=[UI_TAG_ARTIFACT],
+        ).send()
 
     for title, preview_element in table_previews:
-        await cl.Message(content=title, elements=[preview_element]).send()
+        await cl.Message(
+            content=title,
+            elements=[preview_element],
+            metadata=_message_ui_metadata("artifact"),
+            tags=[UI_TAG_ARTIFACT],
+        ).send()
