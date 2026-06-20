@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
+from dataclasses import dataclass
+from typing import Literal
 
 import httpx
 
@@ -13,6 +15,12 @@ logger = logging.getLogger(__name__)
 
 class LLMError(RuntimeError):
     """LLM 调用失败。"""
+
+
+@dataclass(frozen=True)
+class LLMStreamEvent:
+    kind: Literal["content", "reasoning"]
+    text: str
 
 
 class LLMClient:
@@ -32,6 +40,7 @@ class LLMClient:
         self.effort = effort
         self.timeout = timeout
         self._client: httpx.AsyncClient | None = None
+        self.reasoning_callback: Callable[[str], Awaitable[None]] | None = None
 
     async def _get_client(self) -> httpx.AsyncClient:
         if self._client is None or self._client.is_closed:
@@ -46,19 +55,23 @@ class LLMClient:
         temperature: float = 0.1,
         thinking: bool | None = None,
     ) -> str:
-        use_thinking = self.thinking if thinking is None else thinking
-        payload: dict = {
-            "model": self.model,
-            "messages": [{"role": "user", "content": prompt}],
-            "max_tokens": max_tokens,
-            "temperature": temperature,
-        }
-        # DeepSeek 思考模式
-        if use_thinking:
-            payload["thinking"] = {"type": "enabled"}
-        # DeepSeek 最大推理力度
-        if self.effort:
-            payload["output_config"] = {"effort": self.effort}
+        if self.reasoning_callback:
+            chunks: list[str] = []
+            async for event in self.stream_events(
+                prompt,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                thinking=thinking,
+            ):
+                if event.kind == "content":
+                    chunks.append(event.text)
+            content = "".join(chunks)
+            if not content.strip():
+                raise LLMError("LLM 流式响应为空")
+            logger.info("LLM 流式 call 响应: %d chars", len(content))
+            return content
+
+        payload = self._build_payload(prompt, max_tokens, temperature, thinking, stream=False)
         headers = {}
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
@@ -87,6 +100,9 @@ class LLMClient:
         if not choices:
             raise LLMError(f"LLM 响应缺少 choices: {data}")
         message = choices[0].get("message", {})
+        reasoning_content = message.get("reasoning_content") or ""
+        if reasoning_content and self.reasoning_callback:
+            await self.reasoning_callback(reasoning_content)
         content = message.get("content") or ""
         if not content.strip() and message.get("reasoning_content"):
             logger.warning("LLM response only contained reasoning_content; ignoring it as executable output")
@@ -104,18 +120,24 @@ class LLMClient:
         thinking: bool | None = None,
     ) -> AsyncIterator[str]:
         """Stream chat completion content chunks from an OpenAI-compatible API."""
-        use_thinking = self.thinking if thinking is None else thinking
-        payload: dict = {
-            "model": self.model,
-            "messages": [{"role": "user", "content": prompt}],
-            "max_tokens": max_tokens,
-            "temperature": temperature,
-            "stream": True,
-        }
-        if use_thinking:
-            payload["thinking"] = {"type": "enabled"}
-        if self.effort:
-            payload["output_config"] = {"effort": self.effort}
+        async for event in self.stream_events(
+            prompt,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            thinking=thinking,
+        ):
+            if event.kind == "content":
+                yield event.text
+
+    async def stream_events(
+        self,
+        prompt: str,
+        max_tokens: int = 8000,
+        temperature: float = 0.1,
+        thinking: bool | None = None,
+    ) -> AsyncIterator[LLMStreamEvent]:
+        """Stream content and reasoning events from an OpenAI-compatible API."""
+        payload = self._build_payload(prompt, max_tokens, temperature, thinking, stream=True)
         headers = {}
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
@@ -136,13 +158,15 @@ class LLMClient:
                     raise LLMError(f"LLM API 返回 {response.status_code}: {body[:500]}")
 
                 async for line in response.aiter_lines():
-                    chunk = self._parse_stream_line(line)
-                    if chunk is None:
+                    event = self._parse_stream_event(line)
+                    if event is None:
                         continue
-                    if chunk == "[DONE]":
+                    if event == "[DONE]":
                         break
-                    streamed_chars += len(chunk)
-                    yield chunk
+                    streamed_chars += len(event.text)
+                    if event.kind == "reasoning" and self.reasoning_callback:
+                        await self.reasoning_callback(event.text)
+                    yield event
         except LLMError:
             raise
         except httpx.RequestError as exc:
@@ -153,6 +177,14 @@ class LLMClient:
         logger.info("LLM 流式响应完成: %d chars", streamed_chars)
 
     def _parse_stream_line(self, line: str) -> str | None:
+        event = self._parse_stream_event(line)
+        if event == "[DONE]":
+            return "[DONE]"
+        if event is None or event.kind != "content":
+            return None
+        return event.text
+
+    def _parse_stream_event(self, line: str) -> LLMStreamEvent | str | None:
         text = (line or "").strip()
         if not text or text.startswith(":"):
             return None
@@ -172,7 +204,36 @@ class LLMClient:
         choice = choices[0] or {}
         delta = choice.get("delta") or {}
         message = choice.get("message") or {}
-        return delta.get("content") or message.get("content") or None
+        reasoning = delta.get("reasoning_content") or message.get("reasoning_content")
+        if reasoning:
+            return LLMStreamEvent(kind="reasoning", text=reasoning)
+        content = delta.get("content") or message.get("content")
+        if content:
+            return LLMStreamEvent(kind="content", text=content)
+        return None
+
+    def _build_payload(
+        self,
+        prompt: str,
+        max_tokens: int,
+        temperature: float,
+        thinking: bool | None,
+        *,
+        stream: bool,
+    ) -> dict:
+        use_thinking = self.thinking if thinking is None else thinking
+        payload: dict = {
+            "model": self.model,
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "thinking": {"type": "enabled" if use_thinking else "disabled"},
+        }
+        if stream:
+            payload["stream"] = True
+        if self.effort and use_thinking:
+            payload["reasoning_effort"] = self.effort
+        return payload
 
     def count_tokens(self, text: str) -> int:
         # 中文字符约 1-2 token，英文约 1 token / 4 chars

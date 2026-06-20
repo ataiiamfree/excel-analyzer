@@ -442,6 +442,59 @@ def test_parse_plan_from_json():
     assert len(plan.report_outline) == 1
 
 
+def test_parse_plan_drops_report_outline_for_result_task():
+    orch = Orchestrator(llm_client=None, tools=None, config=_make_config())
+    response = json.dumps({
+        "steps": [
+            {"id": "s1", "tool": "python", "description": "排名", "instruction": "输出排名表"},
+        ],
+        "report_outline": [
+            {"title": "数据总览", "related_steps": ["s1"], "word_count": 800},
+        ],
+    })
+
+    plan = orch._parse_plan(response, fallback_instruction="哪家门店销售额最高？输出排名表")
+
+    assert len(plan.steps) == 1
+    assert plan.report_outline == []
+
+
+def test_parse_plan_collapses_multi_step_result_task():
+    orch = Orchestrator(llm_client=None, tools=None, config=_make_config())
+    response = json.dumps({
+        "steps": [
+            {"id": "s1", "tool": "python", "description": "读取数据", "instruction": "读取所有表"},
+            {"id": "s2", "tool": "python", "description": "清洗数据", "instruction": "清洗字段"},
+            {"id": "s3", "tool": "python", "description": "计算指标", "instruction": "计算库存缺口"},
+            {"id": "s4", "tool": "python", "description": "导出结果", "instruction": "保存 Excel"},
+        ],
+        "report_outline": [],
+    })
+
+    plan = orch._parse_plan(response, fallback_instruction="计算库存缺口并导出结果表")
+
+    assert len(plan.steps) == 1
+    assert plan.steps[0].id == "s1"
+    assert "读取所有表" in plan.steps[0].instruction
+    assert "保存 Excel" in plan.steps[0].instruction
+
+
+def test_parse_plan_keeps_report_outline_when_report_requested():
+    orch = Orchestrator(llm_client=None, tools=None, config=_make_config())
+    response = json.dumps({
+        "steps": [
+            {"id": "s1", "tool": "python", "description": "分析", "instruction": "分析数据"},
+        ],
+        "report_outline": [
+            {"title": "数据总览", "related_steps": ["s1"], "word_count": 800},
+        ],
+    })
+
+    plan = orch._parse_plan(response, fallback_instruction="请生成一份完整分析报告")
+
+    assert len(plan.report_outline) == 1
+
+
 def test_parse_plan_from_code_block():
     orch = Orchestrator(llm_client=None, tools=None, config=_make_config())
     response = '```json\n{"steps": [{"id": "s1", "tool": "python", "description": "x", "instruction": "y"}], "report_outline": []}\n```'

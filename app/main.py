@@ -57,6 +57,7 @@ TABLE_PREVIEW_EXTENSIONS = {".xlsx", ".xlsm", ".xls", ".csv", ".tsv"}
 MAX_TABLE_PREVIEWS = 1
 TABLE_PREVIEW_ROWS = 50
 TABLE_PREVIEW_COLS = 24
+MAX_REASONING_UI_CHARS = 12000
 UPLOAD_HELP = (
     "把 Excel 文件拖到这里，或点击选择文件。支持 `.xlsx` / `.xlsm`，单个文件不超过 100MB。"
 )
@@ -278,6 +279,9 @@ async def main(message: cl.Message):
     orchestrator = cl.user_session.get("orchestrator")
     current_file = cl.user_session.get("current_file") or "Excel"
     report_msg: cl.Message | None = None
+    reasoning_msg: cl.Message | None = None
+    reasoning_chars = 0
+    reasoning_truncated = False
 
     async def on_report_token(token: str):
         nonlocal report_msg
@@ -288,9 +292,33 @@ async def main(message: cl.Message):
             await report_msg.send()
         await report_msg.stream_token(token)
 
+    async def on_reasoning_token(token: str):
+        nonlocal reasoning_msg, reasoning_chars, reasoning_truncated
+        if not token or reasoning_truncated:
+            return
+        if reasoning_msg is None:
+            reasoning_msg = cl.Message(content="**DeepSeek 思考**\n\n")
+            await reasoning_msg.send()
+
+        remaining = MAX_REASONING_UI_CHARS - reasoning_chars
+        if remaining <= 0:
+            await reasoning_msg.stream_token("\n\n（思考内容较长，后续已省略。）")
+            reasoning_truncated = True
+            return
+
+        chunk = token[:remaining]
+        reasoning_chars += len(chunk)
+        await reasoning_msg.stream_token(chunk)
+        if len(token) > remaining:
+            await reasoning_msg.stream_token("\n\n（思考内容较长，后续已省略。）")
+            reasoning_truncated = True
+
     reporter = getattr(orchestrator, "reporter", None)
     if reporter is not None:
         reporter.stream_callback = on_report_token
+    llm = getattr(orchestrator, "llm", None)
+    if llm is not None:
+        llm.reasoning_callback = on_reasoning_token
 
     # Progress callbacks — update a single status message in place
     progress_msg = cl.Message(content=f"正在分析 **{current_file}**...")
@@ -319,6 +347,10 @@ async def main(message: cl.Message):
     finally:
         if reporter is not None:
             reporter.stream_callback = None
+        if llm is not None:
+            llm.reasoning_callback = None
+        if reasoning_msg is not None:
+            await reasoning_msg.update()
 
     # Handle task failure with actionable message
     if task_result.failed:
