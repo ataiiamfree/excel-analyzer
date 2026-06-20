@@ -430,7 +430,8 @@ web/
     ├── artifacts/
     │   ├── ChartPreview.tsx
     │   ├── TablePreview.tsx
-    │   └── FileList.tsx
+    │   ├── FileList.tsx
+    │   └── artifactUtils.ts       # 产物去重与排序工具
     └── pages/
         ├── ConversationPage.tsx   # /c/:id
         └── HomePage.tsx           # 空态 + 上传

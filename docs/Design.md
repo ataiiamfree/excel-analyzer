@@ -1531,7 +1531,7 @@ excel-analyzer/
 │   ├── src/api/                    # HTTP / WS client 与共享 TS 类型
 │   ├── src/layout/                 # 三栏 AppShell / Sidebar / ArtifactPanel
 │   ├── src/chat/                   # 消息、计划、步骤、报告、输入框
-│   └── src/artifacts/              # 图表、表格、文件预览
+│   └── src/artifacts/              # 图表、表格、文件预览与产物去重工具
 │
 ├── workspace/                      # 运行时工作目录（git 忽略）
 ├── requirements.txt
@@ -1637,8 +1637,8 @@ class LLMClient:
 - 品牌区和助手消息头只展示 `ChatExcel` 主名称，不展示 `Web Analyst`、`分析师 · API` 等副标题。
 - 侧边栏底部用户卡片只展示头像、用户名和设置入口，不展示 `Local · API` 等状态标签。
 - 首页只保留左侧会话栏和右侧居中的上传主区，不放装饰性原型卡片；上传表单宽度按主区居中约束控制。
-- 产物面板中的预览图标必须切换到可预览产物并定位卡片；表格放大按钮打开大尺寸预览层；代码 tab 只展示源码类产物，不展示 `report.md` 等报告文件。
-- 对话框上方的下一步行动建议由后端在分析完成后通过 LLM 基于报告摘要、步骤反馈和产物清单生成，写入 assistant payload 的 `next_actions`；前端禁止渲染写死建议。
+- 产物面板中的预览图标必须切换到可预览产物并定位卡片；表格放大按钮打开大尺寸预览层；代码 tab 只展示源码类产物，不展示 `report.md` 等报告文件；右侧面板按 `kind + name` 对同名产物去重，默认保留最新版本。
+- 对话框上方的下一步行动建议由后端在分析完成后通过 LLM 基于报告摘要、步骤反馈和产物清单生成，写入 assistant payload 的 `next_actions`；前端禁止渲染写死建议，且只在对话滚动停留在最新消息底部时展示。
 - 用户追问通过 WS 发送时必须携带 `client_msg_id`；后端将其写入 user payload，前端先渲染本地 pending user message，并在历史回放出现同一 `client_msg_id` 后去重。
 - 三栏界面使用固定视口高度：左侧会话栏固定在页面内，中间 `.thread`、左侧 `.chat-list`、右侧 `.panel-body` 分别作为独立滚动容器，避免分析结果生成后页面级滚动被锁死。
 - 新建会话跳转携带的初始分析请求只能被消费一次；刷新 `/c/{conversation_id}` 仅拉取历史消息和产物，不得再次发送同一条分析请求。

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 
@@ -53,6 +53,7 @@ export default function ConversationPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const sentInitial = useRef(false);
+  const [threadAtBottom, setThreadAtBottom] = useState(true);
   const state = (location.state ?? {}) as LocationState;
   const initialQuery = state.initialQuery?.trim() ?? "";
 
@@ -78,6 +79,7 @@ export default function ConversationPage() {
 
   useEffect(() => {
     sentInitial.current = false;
+    setThreadAtBottom(true);
   }, [conversationId]);
 
   useEffect(() => {
@@ -129,15 +131,23 @@ export default function ConversationPage() {
     return ((latestAssistant?.payload as AssistantMessagePayload | undefined)?.next_actions ?? []).slice(0, 3);
   }, [hydratedMessages]);
   const nextActions =
-    stream.livePayload?.status === "running"
+    !threadAtBottom || stream.livePayload?.status === "running"
       ? []
       : stream.livePayload?.status === "done"
         ? (stream.livePayload.next_actions ?? []).slice(0, 3)
         : persistedNextActions;
+  const handleThreadBottomChange = useCallback((atBottom: boolean) => {
+    setThreadAtBottom(atBottom);
+  }, []);
 
   return (
     <AppShell conversation={conversation.data} groups={conversations.data?.groups ?? []} artifacts={allArtifacts}>
-      <Thread messages={displayedMessages} livePayload={livePayload} artifacts={allArtifacts} />
+      <Thread
+        messages={displayedMessages}
+        livePayload={livePayload}
+        artifacts={allArtifacts}
+        onAtBottomChange={handleThreadBottomChange}
+      />
       <Composer
         disabled={stream.status !== "open" || stream.livePayload?.status === "running"}
         nextActions={nextActions}
