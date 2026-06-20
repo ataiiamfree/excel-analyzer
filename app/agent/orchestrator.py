@@ -116,6 +116,7 @@ class Orchestrator:
         *,
         on_step_start: Callable[[Step], Awaitable[None]] | None = None,
         on_step_end: Callable[[Step, StepResult], Awaitable[None]] | None = None,
+        on_plan_ready: Callable[[ExecutionPlan], Awaitable[None]] | None = None,
     ) -> TaskResult:
         """Full pipeline: Ingest → Preprocess → Profile → Plan → Execute → Report.
 
@@ -180,6 +181,8 @@ class Orchestrator:
         for s in plan.steps:
             logger.info("  Step %s [%s]: %s", s.id, s.tool, s.description)
         workspace.save_json("plan.json", plan.to_dict())
+        if on_plan_ready:
+            await on_plan_ready(plan)
 
         # 执行
         self._on_step_start = on_step_start

@@ -31,6 +31,7 @@
 - **单次调用 token 有硬上限**：任何一次 LLM 调用的输入不超过预算上限（standard: 4K / generous: 16K，见第六章 Token 预算全景）
 - **Adaptive Plan-Execute 编排**：先粗略规划全局，每步执行后根据实际结果动态细化下一步（详见 Implementation-Plan.md 第〇章）
 - **只流式输出用户可见内容**：最终报告章节和简短结论通过 Chainlit 流式展示；DeepSeek 返回的 reasoning_content 单独展示为“DeepSeek 思考”，不混入报告正文
+- **Plan-Execute 过程可见**：规划完成后在 UI 展示执行计划；每个 Execute 步骤用可展开步骤展示输入、stdout 摘要、脚本路径和产物
 - **结果型任务单脚本优先**：普通 Excel 分析、导出、画图任务默认合并为一个 Python 步骤，避免多步重复生成大段代码
 - **原始文件不可变**：永远保留 raw workbook，所有清洗、拆表、派生字段都写入新的 normalized/artifact 文件
 - **结果先校验再报告**：代码跑通不等于分析正确，关键步骤必须经过结构化结果检查
@@ -1682,6 +1683,14 @@ async def main(message: cl.Message):
         async with cl.Step(name=step_info.description) as step:
             # ... execute ...
             step.output = result.summary
+
+    # 展示执行计划和每个 Execute 步骤；步骤完成后显示 stdout 摘要、脚本路径和产物。
+    await cl.Message(content=format_plan(plan)).send()
+    for step in plan.steps:
+        async with cl.Step(name=step.description) as step_panel:
+            step_panel.input = step.instruction
+            result = await run_step(step)
+            step_panel.output = summarize_step_result(result)
 
     # 流式发送报告文本；DeepSeek 思考内容在独立消息中展示。
     # 附件和表格预览等产物仍在任务结束后单独发送。

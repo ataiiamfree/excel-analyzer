@@ -635,10 +635,15 @@ def test_run_first_analysis_preprocesses_into_workspace(tmp_path):
     )
     session = Session.create(file_path=str(workbook_path))
     orch = Orchestrator(llm_client=PlanningLLM(), tools=tools, config=config)
+    plans = []
 
-    result = asyncio.run(orch.run("分析金额", session))
+    async def on_plan_ready(plan):
+        plans.append(plan)
+
+    result = asyncio.run(orch.run("分析金额", session, on_plan_ready=on_plan_ready))
 
     assert result.report.startswith("# 分析结果")
+    assert len(plans) == 1
     assert session.profile is not None
     assert session.normalized_dir is not None
     assert Path(session.normalized_dir).is_absolute()

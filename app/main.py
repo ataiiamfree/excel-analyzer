@@ -173,6 +173,44 @@ def _chunk_text_for_stream(text: str, chunk_size: int = 32) -> list[str]:
     return [text[index:index + chunk_size] for index in range(0, len(text), chunk_size)]
 
 
+def _format_plan_for_ui(steps: list[Step]) -> str:
+    if not steps:
+        return "**执行计划**\n\n- 使用默认流程完成分析"
+    lines = ["**执行计划**"]
+    for index, step in enumerate(steps, start=1):
+        label = step.description or step.instruction or "执行分析"
+        lines.append(f"{index}. `{step.tool}` {label}")
+    return "\n".join(lines)
+
+
+def _format_step_result_for_ui(step: Step, result: StepResult) -> str:
+    parts: list[str] = []
+    if result.failed:
+        parts.append("状态：失败")
+        if result.error:
+            parts.append("错误摘要：\n```text\n" + _truncate_text(result.error, 1200) + "\n```")
+    else:
+        parts.append("状态：完成")
+
+    if result.stdout:
+        parts.append("执行输出：\n```text\n" + _truncate_text(result.stdout, 1600) + "\n```")
+    if result.files:
+        files = "\n".join(f"- {path}" for path in result.files[:8])
+        if len(result.files) > 8:
+            files += f"\n- ... 另有 {len(result.files) - 8} 个文件"
+        parts.append("产物：\n" + files)
+    if result.script_path:
+        parts.append(f"脚本：`{result.script_path}`")
+    return "\n\n".join(parts) if parts else f"{step.description} 已完成。"
+
+
+def _truncate_text(text: str, max_chars: int) -> str:
+    clean = (text or "").strip()
+    if len(clean) <= max_chars:
+        return clean
+    return clean[:max_chars].rstrip() + "\n..."
+
+
 async def _setup_session(file_path: str, file_name: str):
     """Create a new session and orchestrator for the given file."""
     session = Session.create(file_path=file_path)
@@ -282,6 +320,7 @@ async def main(message: cl.Message):
     reasoning_msg: cl.Message | None = None
     reasoning_chars = 0
     reasoning_truncated = False
+    active_steps: dict[str, cl.Step] = {}
 
     async def on_report_token(token: str):
         nonlocal report_msg
@@ -324,21 +363,36 @@ async def main(message: cl.Message):
     progress_msg = cl.Message(content=f"正在分析 **{current_file}**...")
     await progress_msg.send()
 
+    async def on_plan_ready(plan):
+        await cl.Message(content=_format_plan_for_ui(plan.steps)).send()
+
     async def on_step_start(step: Step, step_index: int = 0, total_steps: int = 0):
         if total_steps > 1:
             progress_msg.content = f"正在分析 **{current_file}**... `[{step_index}/{total_steps}]` {step.description}"
         else:
             progress_msg.content = f"正在分析 **{current_file}**... {step.description}"
         await progress_msg.update()
+        step_title = f"[{step_index}/{total_steps}] {step.description}" if total_steps > 0 else step.description
+        cl_step = cl.Step(name=step_title or step.id)
+        cl_step.input = step.instruction or step.description
+        await cl_step.__aenter__()
+        active_steps[step.id] = cl_step
 
     async def on_step_end(step: Step, result: StepResult):
-        pass  # progress updates on next step_start; final cleanup after run
+        cl_step = active_steps.pop(step.id, None)
+        if cl_step is None:
+            await cl.Message(content=_format_step_result_for_ui(step, result)).send()
+            return
+        cl_step.output = _format_step_result_for_ui(step, result)
+        await cl_step.__aexit__(None, None, None)
+
     try:
         task_result = await orchestrator.run(
             query=message.content,
             session=session,
             on_step_start=on_step_start,
             on_step_end=on_step_end,
+            on_plan_ready=on_plan_ready,
         )
     except Exception as e:
         logger.exception("分析过程出错")
@@ -351,6 +405,10 @@ async def main(message: cl.Message):
             llm.reasoning_callback = None
         if reasoning_msg is not None:
             await reasoning_msg.update()
+        for cl_step in active_steps.values():
+            cl_step.output = "任务中断，未收到步骤完成回调。"
+            await cl_step.__aexit__(None, None, None)
+        active_steps.clear()
 
     # Handle task failure with actionable message
     if task_result.failed:
