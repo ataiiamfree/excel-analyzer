@@ -9,6 +9,8 @@ import mimetypes
 from pathlib import Path
 from typing import Optional
 
+import pandas as pd
+
 # Ensure project root is on sys.path so `app.*` imports work when
 # Chainlit runs this file directly.
 _PROJECT_ROOT = str(Path(__file__).resolve().parent.parent)
@@ -51,6 +53,10 @@ DOWNLOADABLE_EXTENSIONS = {
     ".xlsx", ".xlsm", ".xls", ".csv", ".tsv", ".parquet", ".pdf",
     ".png", ".jpg", ".jpeg", ".svg",
 }
+TABLE_PREVIEW_EXTENSIONS = {".xlsx", ".xlsm", ".xls", ".csv", ".tsv"}
+MAX_TABLE_PREVIEWS = 1
+TABLE_PREVIEW_ROWS = 50
+TABLE_PREVIEW_COLS = 24
 UPLOAD_HELP = (
     "把 Excel 文件拖到这里，或点击选择文件。支持 `.xlsx` / `.xlsm`，单个文件不超过 100MB。"
 )
@@ -126,6 +132,44 @@ def _describe_file(path: str) -> str:
     if suffix in {".xlsx", ".xlsm"}:
         return f"{name}.xlsx"
     return p.name
+
+
+def _table_preview_for_path(path: str) -> pd.DataFrame | None:
+    """Load a bounded table preview for inline UI rendering."""
+    p = Path(path)
+    suffix = p.suffix.lower()
+    try:
+        if suffix == ".csv":
+            df = pd.read_csv(p, encoding="utf-8-sig", nrows=TABLE_PREVIEW_ROWS)
+        elif suffix == ".tsv":
+            df = pd.read_csv(p, sep="\t", encoding="utf-8-sig", nrows=TABLE_PREVIEW_ROWS)
+        elif suffix in {".xlsx", ".xlsm", ".xls"}:
+            df = pd.read_excel(p, sheet_name=0, nrows=TABLE_PREVIEW_ROWS)
+        else:
+            return None
+    except Exception:
+        logger.exception("表格预览读取失败: %s", path)
+        return None
+
+    if df.empty:
+        return None
+    if len(df.columns) > TABLE_PREVIEW_COLS:
+        df = df.iloc[:, :TABLE_PREVIEW_COLS].copy()
+    return df
+
+
+async def _stream_text_message(text: str) -> cl.Message:
+    """Stream already assembled text so short responses use the same UI path."""
+    msg = cl.Message(content="")
+    await msg.send()
+    for chunk in _chunk_text_for_stream(text):
+        await msg.stream_token(chunk)
+    await msg.update()
+    return msg
+
+
+def _chunk_text_for_stream(text: str, chunk_size: int = 32) -> list[str]:
+    return [text[index:index + chunk_size] for index in range(0, len(text), chunk_size)]
 
 
 async def _setup_session(file_path: str, file_name: str):
@@ -233,23 +277,34 @@ async def main(message: cl.Message):
 
     orchestrator = cl.user_session.get("orchestrator")
     current_file = cl.user_session.get("current_file") or "Excel"
+    report_msg: cl.Message | None = None
 
-    # Progress callbacks — show each step with index
+    async def on_report_token(token: str):
+        nonlocal report_msg
+        if not token:
+            return
+        if report_msg is None:
+            report_msg = cl.Message(content="")
+            await report_msg.send()
+        await report_msg.stream_token(token)
+
+    reporter = getattr(orchestrator, "reporter", None)
+    if reporter is not None:
+        reporter.stream_callback = on_report_token
+
+    # Progress callbacks — update a single status message in place
+    progress_msg = cl.Message(content=f"正在分析 **{current_file}**...")
+    await progress_msg.send()
+
     async def on_step_start(step: Step, step_index: int = 0, total_steps: int = 0):
-        progress = f"[{step_index}/{total_steps}] " if total_steps > 0 else ""
-        cl_step = cl.Step(name=f"{progress}{step.description}")
-        await cl_step.__aenter__()
-        cl.user_session.set("current_cl_step", cl_step)
+        if total_steps > 1:
+            progress_msg.content = f"正在分析 **{current_file}**... `[{step_index}/{total_steps}]` {step.description}"
+        else:
+            progress_msg.content = f"正在分析 **{current_file}**... {step.description}"
+        await progress_msg.update()
 
     async def on_step_end(step: Step, result: StepResult):
-        cl_step: cl.Step | None = cl.user_session.get("current_cl_step")
-        if cl_step:
-            cl_step.output = result.stdout[:500] if result.stdout else "(完成)"
-            await cl_step.__aexit__(None, None, None)
-            cl.user_session.set("current_cl_step", None)
-
-    # Run the analysis
-    progress_msg = await cl.Message(content=f"正在分析 **{current_file}**...").send()
+        pass  # progress updates on next step_start; final cleanup after run
     try:
         task_result = await orchestrator.run(
             query=message.content,
@@ -261,6 +316,9 @@ async def main(message: cl.Message):
         logger.exception("分析过程出错")
         await cl.Message(content=_friendly_error(e)).send()
         return
+    finally:
+        if reporter is not None:
+            reporter.stream_callback = None
 
     # Handle task failure with actionable message
     if task_result.failed:
@@ -276,9 +334,12 @@ async def main(message: cl.Message):
     # Send report
     report_text = _report_for_ui(task_result.report)
 
-    # Collect downloadable elements
+    # Collect downloadable elements and keep table previews in separate messages.
+    # Dataframe elements become cramped when grouped with file cards.
     elements: list[cl.Element] = []
+    table_previews: list[tuple[str, cl.Element]] = []
     file_descriptions: list[str] = []
+    table_preview_count = 0
     for fpath in task_result.files:
         name = os.path.basename(fpath)
         full_path = fpath if os.path.isabs(fpath) else str(Path(fpath))
@@ -291,17 +352,33 @@ async def main(message: cl.Message):
             elements.append(cl.Image(path=full_path, name=name, display="inline"))
             file_descriptions.append(f"- {_describe_file(full_path)}")
         else:
+            if suffix in TABLE_PREVIEW_EXTENSIONS and table_preview_count < MAX_TABLE_PREVIEWS:
+                preview = _table_preview_for_path(full_path)
+                if preview is not None:
+                    table_previews.append(
+                        (
+                            f"**结果表预览：** {name}（前 {len(preview)} 行）",
+                            cl.Dataframe(
+                                name=f"预览：{name}",
+                                data=preview,
+                                display="inline",
+                            ),
+                        )
+                    )
+                    table_preview_count += 1
             elements.append(cl.File(path=full_path, name=name, mime=_mime_for_path(full_path)))
             file_descriptions.append(f"- {_describe_file(full_path)}")
 
-    # Send report + files together or separately
-    if report_text and elements:
-        # Append file list to report
-        file_list = "\n".join(file_descriptions)
-        combined = f"{report_text}\n\n---\n**可下载的文件：**\n{file_list}"
-        await cl.Message(content=combined, elements=elements).send()
+    # Finalize streamed report, then send files separately to avoid disrupting token flow.
+    if report_msg is not None:
+        await report_msg.update()
     elif report_text:
-        await cl.Message(content=report_text).send()
-    elif elements:
+        await _stream_text_message(report_text)
+
+    if elements:
         file_list = "\n".join(file_descriptions)
-        await cl.Message(content=f"**分析完成，可下载的文件：**\n{file_list}", elements=elements).send()
+        heading = "**可下载的文件：**" if report_text else "**分析完成，可下载的文件：**"
+        await cl.Message(content=f"{heading}\n{file_list}", elements=elements).send()
+
+    for title, preview_element in table_previews:
+        await cl.Message(content=title, elements=[preview_element]).send()

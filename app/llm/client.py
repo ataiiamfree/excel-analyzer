@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import logging
+from collections.abc import AsyncIterator
 
 import httpx
 
@@ -93,6 +95,84 @@ class LLMClient:
             raise LLMError(f"LLM 响应为空: finish_reason={finish_reason}")
         logger.info("LLM 响应: %d chars", len(content))
         return content
+
+    async def stream(
+        self,
+        prompt: str,
+        max_tokens: int = 8000,
+        temperature: float = 0.1,
+        thinking: bool | None = None,
+    ) -> AsyncIterator[str]:
+        """Stream chat completion content chunks from an OpenAI-compatible API."""
+        use_thinking = self.thinking if thinking is None else thinking
+        payload: dict = {
+            "model": self.model,
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "stream": True,
+        }
+        if use_thinking:
+            payload["thinking"] = {"type": "enabled"}
+        if self.effort:
+            payload["output_config"] = {"effort": self.effort}
+        headers = {}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+
+        logger.info("LLM 流式请求: model=%s, prompt=%d chars, max_tokens=%d",
+                    self.model, len(prompt), max_tokens)
+        client = await self._get_client()
+        streamed_chars = 0
+        try:
+            async with client.stream(
+                "POST",
+                f"{self.base_url}/v1/chat/completions",
+                json=payload,
+                headers=headers,
+            ) as response:
+                if response.status_code >= 400:
+                    body = (await response.aread()).decode("utf-8", errors="replace")
+                    raise LLMError(f"LLM API 返回 {response.status_code}: {body[:500]}")
+
+                async for line in response.aiter_lines():
+                    chunk = self._parse_stream_line(line)
+                    if chunk is None:
+                        continue
+                    if chunk == "[DONE]":
+                        break
+                    streamed_chars += len(chunk)
+                    yield chunk
+        except LLMError:
+            raise
+        except httpx.RequestError as exc:
+            raise LLMError(f"LLM 流式请求失败: {exc}") from exc
+
+        if streamed_chars <= 0:
+            raise LLMError("LLM 流式响应为空")
+        logger.info("LLM 流式响应完成: %d chars", streamed_chars)
+
+    def _parse_stream_line(self, line: str) -> str | None:
+        text = (line or "").strip()
+        if not text or text.startswith(":"):
+            return None
+        if text.startswith("data:"):
+            text = text[5:].strip()
+        if text == "[DONE]":
+            return "[DONE]"
+
+        try:
+            data = json.loads(text)
+        except ValueError as exc:
+            raise LLMError(f"LLM 流式响应非 JSON: {text[:300]}") from exc
+
+        choices = data.get("choices") or []
+        if not choices:
+            return None
+        choice = choices[0] or {}
+        delta = choice.get("delta") or {}
+        message = choice.get("message") or {}
+        return delta.get("content") or message.get("content") or None
 
     def count_tokens(self, text: str) -> int:
         # 中文字符约 1-2 token，英文约 1 token / 4 chars
