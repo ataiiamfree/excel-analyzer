@@ -1,5 +1,5 @@
 import { ChangeEvent, FormEvent, useState } from "react";
-import { FileSpreadsheet, SendHorizontal, UploadCloud } from "lucide-react";
+import { SendHorizontal, UploadCloud } from "lucide-react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 
@@ -72,52 +72,6 @@ export default function HomePage() {
           {create.error ? <p style={{ color: "var(--accent)" }}>{String(create.error.message)}</p> : null}
         </form>
       </main>
-      <aside className="home-art">
-        <div className="prototype-card">
-          <div className="assistant-head">
-            <span className="glyph" />
-            <span className="name">ChatExcel</span>
-            <span className="role">分析师 · API</span>
-            <span className="ts">ready</span>
-          </div>
-          <div className="plan">
-            <h4>
-              <span>执行计划</span>
-              <span className="scope">3 步 · python</span>
-            </h4>
-            {["读取并识别表结构", "生成分析脚本", "输出报告与产物"].map((label, index) => (
-              <div className={`step ${index === 0 ? "done" : index === 1 ? "running" : "pending"}`} key={label}>
-                <div className="marker">{String(index + 1).padStart(2, "0")}</div>
-                <div className="body">
-                  <div className="label">{label}</div>
-                  <div className="desc">数据留在沙箱中流转，LLM 只读取摘要和执行反馈。</div>
-                  <div className="tags">
-                    <span className="tag python">python</span>
-                    <span className="tag">manifest</span>
-                  </div>
-                </div>
-                <div className="timing">{index === 1 ? <span className="pulse">执行中</span> : <span>ready</span>}</div>
-              </div>
-            ))}
-          </div>
-          <div className="artifact-chips">
-            <span className="chip">
-              <span className="ico xlsx">XL</span>
-              <span className="info">
-                <span className="n">result.xlsx</span>
-                <span className="s">可下载明细</span>
-              </span>
-            </span>
-            <span className="chip">
-              <span className="ico png">IMG</span>
-              <span className="info">
-                <span className="n">chart.png</span>
-                <span className="s">图表预览</span>
-              </span>
-            </span>
-          </div>
-        </div>
-      </aside>
     </div>
   );
 }

@@ -30,7 +30,6 @@ export default function MessageAssistant({ payload, artifacts, createdAt, live }
       <div className="assistant-head">
         <span className="glyph" />
         <span className="name">ChatExcel</span>
-        <span className="role">分析师 · API</span>
         <span className="ts">{timeLabel(payload, createdAt, live)}</span>
       </div>
 

@@ -1633,6 +1633,8 @@ class LLMClient:
 - React 前端位于 `web/`，采用 Vite + React 18 + TypeScript。
 - REST 负责会话列表、历史消息、文件上传、产物下载与表格预览。
 - WebSocket `/ws/conversations/{id}` 负责流式分析事件。
+- 品牌区和助手消息头只展示 `ChatExcel` 主名称，不展示 `Web Analyst`、`分析师 · API` 等副标题。
+- 首页只保留左侧会话栏和右侧居中的上传主区，不放装饰性原型卡片；上传表单宽度按主区居中约束控制。
 - 三栏界面使用固定视口高度：左侧会话栏固定在页面内，中间 `.thread`、左侧 `.chat-list`、右侧 `.panel-body` 分别作为独立滚动容器，避免分析结果生成后页面级滚动被锁死。
 - 新建会话跳转携带的初始分析请求只能被消费一次；刷新 `/c/{conversation_id}` 仅拉取历史消息和产物，不得再次发送同一条分析请求。
 - 后端仍复用 `app/agent/` 业务核心，不重写 Plan-Execute-Repair 编排。

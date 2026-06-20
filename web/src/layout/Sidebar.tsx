@@ -40,7 +40,6 @@ export default function Sidebar({ activeId, groups }: SidebarProps) {
           <div className="brand-name">
             Chat<em>Excel</em>
           </div>
-          <div className="brand-meta">Web Analyst</div>
         </div>
       </div>
 
