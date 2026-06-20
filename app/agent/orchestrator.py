@@ -455,12 +455,23 @@ class Orchestrator:
 
             if result.failed or check.status == "failed":
                 logger.error("✗ Step %s 失败: %s", step.id, (result.error or check.to_prompt_text())[:200])
+                if check.status == "failed" and not result.failed:
+                    result = StepResult(
+                        stdout=result.stdout,
+                        files=result.files,
+                        failed=True,
+                        error=check.to_prompt_text(),
+                        retries_exhausted=result.retries_exhausted,
+                        script_path=result.script_path,
+                    )
                 plan.mark_failed(step.id, result.error or check.to_prompt_text(), check.status)
                 if result.retries_exhausted and hasattr(self.tools, "planner"):
                     plan = await self._replan(context, step, result.error or check.to_prompt_text())
                     context.plan = plan
                     workspace.save_json("plan.json", plan.to_dict())
                     continue
+                if on_step_end:
+                    await on_step_end(step, result)
                 workspace.write_state(
                     status="failed",
                     current_step=step.id,

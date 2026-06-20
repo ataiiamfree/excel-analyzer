@@ -1575,6 +1575,7 @@ WS     /ws/conversations/{id}
 ### 8.2 LLM Client 接口
 
 当前版本默认使用 DeepSeek API，但配置必须通过环境变量注入，不能把 API key 写进代码、文档或 prompt 日志。
+FastAPI 服务入口通过 `app.config.Config` 加载项目根目录 `.env`，因此 `uvicorn app.api.server:app` 与测试/脚本入口使用同一套环境变量。
 
 ```bash
 export DEEPSEEK_BASE_URL="https://api.deepseek.com"
