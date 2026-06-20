@@ -91,7 +91,6 @@ export default function Sidebar({ activeId, groups }: SidebarProps) {
         <div className="avatar">NX</div>
         <div className="user-meta">
           <span className="name">Natalia X.</span>
-          <span className="plan">Local · API</span>
         </div>
         <button className="gear" title="设置">
           <Settings size={15} />
