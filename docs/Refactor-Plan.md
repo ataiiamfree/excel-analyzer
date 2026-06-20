@@ -176,7 +176,7 @@ type ServerEvent =
   | { type: "step.end",      seq, step_id, status: "done"|"failed", stdout, error, files, script_path, duration_ms }
   | { type: "report.delta",  seq, delta: string }
   | { type: "artifact.created", seq, artifact_id, name, kind, size, message_id }
-  | { type: "run.complete",  seq, message_id, report: string, file_ids: string[], duration_ms }
+  | { type: "run.complete",  seq, message_id, report: string, file_ids: string[], duration_ms, result?: AssistantMessagePayload }
   | { type: "run.failed",    seq, failed_step_description, error_summary }
   | { type: "cancelled",     seq }
 ```
@@ -343,6 +343,7 @@ interface AssistantMessagePayload {
   reasoning?: { text: string; tokens: number };
   steps: StepRecord[];                // 与 plan.steps 一一对应，含执行结果
   report: string;                     // markdown
+  next_actions: string[];             // LLM 基于报告摘要生成的下一步行动建议
   artifact_ids: string[];             // 指向 Artifact 表
   metrics: { duration_ms: number; started_at: string; ended_at?: string };
   error?: { failed_step_description: string; summary: string };

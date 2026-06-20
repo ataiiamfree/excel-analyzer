@@ -3,10 +3,11 @@ import { KeyboardEvent, useState } from "react";
 
 interface ComposerProps {
   disabled?: boolean;
+  nextActions?: string[];
   onSend: (message: string) => void;
 }
 
-export default function Composer({ disabled, onSend }: ComposerProps) {
+export default function Composer({ disabled, nextActions = [], onSend }: ComposerProps) {
   const [value, setValue] = useState("");
 
   const submit = () => {
@@ -25,11 +26,15 @@ export default function Composer({ disabled, onSend }: ComposerProps) {
 
   return (
     <div className="composer-wrap">
-      <div className="starter-row">
-        <button className="starter" onClick={() => setValue("继续按 SKU 拆品类")}>继续按 SKU 拆品类</button>
-        <button className="starter" onClick={() => setValue("画一张归因瀑布图")}>画一张归因瀑布图</button>
-        <button className="starter" onClick={() => setValue("导出行动建议表")}>导出行动建议表</button>
-      </div>
+      {nextActions.length > 0 && !disabled ? (
+        <div className="starter-row">
+          {nextActions.map((action) => (
+            <button className="starter" key={action} onClick={() => setValue(action)}>
+              {action}
+            </button>
+          ))}
+        </div>
+      ) : null}
       <div className="composer">
         <textarea
           value={value}

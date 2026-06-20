@@ -66,6 +66,7 @@ export interface AssistantMessagePayload {
   reasoning?: { text: string; tokens: number } | null;
   steps: StepRecord[];
   report: string;
+  next_actions: string[];
   artifact_ids: string[];
   metrics: Record<string, unknown>;
   error?: { failed_step_description: string; summary: string } | null;

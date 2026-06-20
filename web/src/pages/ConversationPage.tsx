@@ -4,6 +4,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { fetchArtifacts, fetchConversation, fetchConversations, fetchMessages } from "../api/http";
 import { useConversationStream } from "../api/ws";
+import type { AssistantMessagePayload } from "../api/types";
 import AppShell from "../layout/AppShell";
 import Composer from "../chat/Composer";
 import Thread from "../chat/Thread";
@@ -98,11 +99,27 @@ export default function ConversationPage() {
   const allArtifacts = artifacts.data ?? [];
   const livePayload = stream.livePayload?.status === "running" ? stream.livePayload : null;
   const hydratedMessages = useMemo(() => messages.data ?? [], [messages.data]);
+  const persistedNextActions = useMemo(() => {
+    const latestAssistant = [...hydratedMessages]
+      .reverse()
+      .find((message) => message.role === "assistant" && (message.payload as AssistantMessagePayload).status === "done");
+    return ((latestAssistant?.payload as AssistantMessagePayload | undefined)?.next_actions ?? []).slice(0, 3);
+  }, [hydratedMessages]);
+  const nextActions =
+    stream.livePayload?.status === "running"
+      ? []
+      : stream.livePayload?.status === "done"
+        ? (stream.livePayload.next_actions ?? []).slice(0, 3)
+        : persistedNextActions;
 
   return (
     <AppShell conversation={conversation.data} groups={conversations.data?.groups ?? []} artifacts={allArtifacts}>
       <Thread messages={hydratedMessages} livePayload={livePayload} artifacts={allArtifacts} />
-      <Composer disabled={stream.status !== "open" || stream.livePayload?.status === "running"} onSend={stream.sendMessage} />
+      <Composer
+        disabled={stream.status !== "open" || stream.livePayload?.status === "running"}
+        nextActions={nextActions}
+        onSend={stream.sendMessage}
+      />
     </AppShell>
   );
 }

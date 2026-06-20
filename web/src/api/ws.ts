@@ -10,6 +10,7 @@ function initialPayload(query = ""): AssistantMessagePayload {
     reasoning: { text: "", tokens: 0 },
     steps: [],
     report: "",
+    next_actions: [],
     artifact_ids: [],
     metrics: {}
   };
@@ -78,6 +79,7 @@ function reduceEvent(payload: AssistantMessagePayload | null, event: ServerEvent
       ...(result ?? payload),
       status: "done",
       report: event.report || result?.report || payload.report,
+      next_actions: result?.next_actions ?? payload.next_actions ?? [],
       artifact_ids: event.file_ids.length ? event.file_ids : result?.artifact_ids ?? payload.artifact_ids,
       metrics: { ...payload.metrics, ...(result?.metrics ?? {}), duration_ms: event.duration_ms }
     };

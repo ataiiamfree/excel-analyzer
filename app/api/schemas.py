@@ -95,6 +95,7 @@ class AssistantMessagePayload(BaseModel):
     reasoning: dict[str, Any] | None = None
     steps: list[StepRecordPayload] = Field(default_factory=list)
     report: str = ""
+    next_actions: list[str] = Field(default_factory=list)
     artifact_ids: list[str] = Field(default_factory=list)
     metrics: dict[str, Any] = Field(default_factory=dict)
     error: dict[str, str] | None = None

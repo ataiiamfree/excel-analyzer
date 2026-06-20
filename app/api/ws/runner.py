@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable
 
 from app.agent.orchestrator import StepResult, build_orchestrator
+from app.agent.next_actions import generate_next_actions
 from app.agent.plan import ExecutionPlan, Step
 from app.api.artifact_utils import artifact_urls, infer_artifact_kind, sha256_file
 from app.api.deps import SessionRegistry
@@ -72,6 +73,7 @@ def initial_payload(query: str, started_at: datetime) -> dict[str, Any]:
         "reasoning": {"text": "", "tokens": 0},
         "steps": [],
         "report": "",
+        "next_actions": [],
         "artifact_ids": [],
         "metrics": {"started_at": started_at.isoformat()},
     }
@@ -334,6 +336,14 @@ async def _run_query(
     payload["status"] = "failed" if task_result.failed else "done"
     payload["report"] = task_result.report or payload.get("report", "")
     payload["artifact_ids"] = artifact_ids
+    if not task_result.failed:
+        payload["next_actions"] = await generate_next_actions(
+            llm_client=orchestrator.llm,
+            query=query,
+            report=payload["report"],
+            steps=payload["steps"],
+            artifacts=artifacts,
+        )
     payload["metrics"].update(
         {
             "duration_ms": duration_ms,

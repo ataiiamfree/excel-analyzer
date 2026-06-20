@@ -1495,7 +1495,8 @@ excel-analyzer/
 │   │   ├── __init__.py
 │   │   ├── orchestrator.py         # 核心调度器（Skill 执行器注册表）
 │   │   ├── planner.py              # 规划器
-│   │   └── reporter.py             # 报告生成器
+│   │   ├── reporter.py             # 报告生成器
+│   │   └── next_actions.py         # 基于分析摘要生成下一步行动建议
 │   │
 │   ├── context/
 │   │   ├── __init__.py
@@ -1637,6 +1638,7 @@ class LLMClient:
 - 侧边栏底部用户卡片只展示头像、用户名和设置入口，不展示 `Local · API` 等状态标签。
 - 首页只保留左侧会话栏和右侧居中的上传主区，不放装饰性原型卡片；上传表单宽度按主区居中约束控制。
 - 产物面板中的预览图标必须切换到可预览产物并定位卡片；表格放大按钮打开大尺寸预览层；代码 tab 只展示源码类产物，不展示 `report.md` 等报告文件。
+- 对话框上方的下一步行动建议由后端在分析完成后通过 LLM 基于报告摘要、步骤反馈和产物清单生成，写入 assistant payload 的 `next_actions`；前端禁止渲染写死建议。
 - 三栏界面使用固定视口高度：左侧会话栏固定在页面内，中间 `.thread`、左侧 `.chat-list`、右侧 `.panel-body` 分别作为独立滚动容器，避免分析结果生成后页面级滚动被锁死。
 - 新建会话跳转携带的初始分析请求只能被消费一次；刷新 `/c/{conversation_id}` 仅拉取历史消息和产物，不得再次发送同一条分析请求。
 - 后端仍复用 `app/agent/` 业务核心，不重写 Plan-Execute-Repair 编排。
@@ -1653,7 +1655,7 @@ type ServerEvent =
   | { type: "step.end"; seq: number; step_id: string; status: "done" | "failed" }
   | { type: "report.delta"; seq: number; delta: string }
   | { type: "artifact.created"; seq: number; artifact_id: string; name: string }
-  | { type: "run.complete"; seq: number; message_id: string; report: string }
+  | { type: "run.complete"; seq: number; message_id: string; report: string; result?: AssistantMessagePayload }
   | { type: "run.failed"; seq: number; error_summary: string }
   | { type: "cancelled"; seq: number };
 ```
@@ -1784,7 +1786,7 @@ async def run(self, query: str, session: Session) -> TaskResult:
 `WORKSPACE_DIR/chat_excel.sqlite3`。持久化对象包括：
 
 - `conversations`：会话标题、上传文件名、文件大小、sheet/row profile、收藏与归档状态。
-- `messages`：用户消息与 assistant payload；assistant payload 保存 plan、steps、reasoning、report、artifact_ids 与 metrics。
+- `messages`：用户消息与 assistant payload；assistant payload 保存 plan、steps、reasoning、report、next_actions、artifact_ids 与 metrics。
 - `artifacts`：产物相对路径、类型、大小、sha256 和下载/预览所需元数据。
 
 React 前端打开会话时通过 `/api/conversations/{id}/messages` 回放历史，通过
