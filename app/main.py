@@ -69,6 +69,17 @@ UI_TAG_EXECUTE = "cx-execute"
 UI_TAG_RESULT = "cx-result"
 UI_TAG_ARTIFACT = "cx-artifact"
 UI_TAG_PREVIEW = "cx-preview"
+UI_MARKER_PREFIX = "\u2063\u2062"
+UI_MARKER_SUFFIX = "\u2062\u2063"
+UI_KIND_MARKERS = {
+    "reasoning": f"{UI_MARKER_PREFIX}\u200b{UI_MARKER_SUFFIX}",
+    "progress": f"{UI_MARKER_PREFIX}\u200c{UI_MARKER_SUFFIX}",
+    "plan": f"{UI_MARKER_PREFIX}\u200d{UI_MARKER_SUFFIX}",
+    "execute": f"{UI_MARKER_PREFIX}\u2060{UI_MARKER_SUFFIX}",
+    "result": f"{UI_MARKER_PREFIX}\u2061{UI_MARKER_SUFFIX}",
+    "artifact": f"{UI_MARKER_PREFIX}\u2063{UI_MARKER_SUFFIX}",
+    "preview": f"{UI_MARKER_PREFIX}\u2064{UI_MARKER_SUFFIX}",
+}
 UPLOAD_HELP = (
     "把 Excel 文件拖到这里，或点击选择文件。支持 `.xlsx` / `.xlsm`，单个文件不超过 100MB。"
 )
@@ -198,8 +209,12 @@ def _message_ui_metadata(kind: str) -> dict[str, str]:
     return {"cx_kind": kind}
 
 
+def _message_ui_marker(kind: str) -> str:
+    return UI_KIND_MARKERS.get(kind, "")
+
+
 def _message_ui_content(kind: str, content: str) -> str:
-    marker = f'<span class="cx-ui-marker" data-cx-kind="{kind}" aria-hidden="true"></span>'
+    marker = _message_ui_marker(kind)
     return f"{marker}\n{content}" if content else marker
 
 

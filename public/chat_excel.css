@@ -34,10 +34,6 @@ html.cx-enhanced [class*="markdown"] h3 {
   letter-spacing: 0;
 }
 
-html.cx-enhanced .cx-ui-marker {
-  display: none !important;
-}
-
 html.cx-enhanced button[class*="MuiButton-contained"],
 html.cx-enhanced button[class*="MuiFab-root"],
 html.cx-enhanced button.bg-primary,

@@ -32,7 +32,7 @@
 - **Adaptive Plan-Execute 编排**：先粗略规划全局，每步执行后根据实际结果动态细化下一步（详见 Implementation-Plan.md 第〇章）
 - **用户可见内容与思考分离**：最终报告章节和简短结论通过 Chainlit 流式展示；DeepSeek 返回的 `reasoning_content` 只通过独立回调展示为“DeepSeek 思考”，不混入报告正文、Python 代码或结构化 JSON 输出
 - **Plan-Execute 过程可见**：规划完成后在 UI 展示执行计划；每个 Execute 步骤用可展开步骤展示输入、stdout 摘要、脚本路径和产物
-- **过程与结果视觉分层**：Chainlit 消息写入隐藏 UI 类型标记、`metadata/tags`，前端只读取标记做样式分层，不扫描可见中文文本；思考内容使用更小、更灰的辅助样式，最终结果保持正式答案样式
+- **过程与结果视觉分层**：Chainlit 消息写入不可见文本 UI 类型标记、`metadata/tags`，前端只读取标记做样式分层，不扫描可见中文文本，也不把 HTML marker 写进 Markdown；思考内容使用更小、更灰的辅助样式，最终结果保持正式答案样式
 - **结果型任务单脚本优先**：普通 Excel 分析、导出、画图任务默认合并为一个 Python 步骤，避免多步重复生成大段代码
 - **原始文件不可变**：永远保留 raw workbook，所有清洗、拆表、派生字段都写入新的 normalized/artifact 文件
 - **结果先校验再报告**：代码跑通不等于分析正确，关键步骤必须经过结构化结果检查
@@ -1690,7 +1690,8 @@ async def main(message: cl.Message):
             step.output = result.summary
 
     # 展示执行计划和每个 Execute 步骤；步骤完成后显示 stdout 摘要、脚本路径和产物。
-    # 不同消息类型会写入隐藏 marker + metadata/tags，并由 public/chat_excel.js + CSS 做视觉分层。
+    # 不同消息类型会写入不可见文本 marker + metadata/tags，并由 public/chat_excel.js + CSS 做视觉分层。
+    # marker 不使用 HTML，避免 Chainlit Markdown 转义后把源码展示给用户。
     await cl.Message(
         content=ui_content("plan", format_plan(plan)),
         metadata={"cx_kind": "plan"},

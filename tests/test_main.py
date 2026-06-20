@@ -6,6 +6,7 @@ from app.main import (
     _format_plan_for_ui,
     _format_step_result_for_ui,
     _message_ui_content,
+    _message_ui_marker,
     _message_ui_metadata,
     _mime_for_path,
     _report_for_ui,
@@ -92,6 +93,7 @@ def test_message_ui_metadata_marks_visual_kind():
 def test_message_ui_content_embeds_hidden_kind_marker():
     content = _message_ui_content("reasoning", "过程")
 
-    assert 'class="cx-ui-marker"' in content
-    assert 'data-cx-kind="reasoning"' in content
+    assert "<span" not in content
+    assert "data-cx-kind" not in content
+    assert content.startswith(_message_ui_marker("reasoning"))
     assert content.endswith("\n过程")
