@@ -4,11 +4,12 @@ import type { Artifact } from "../api/types";
 
 interface ChartPreviewProps {
   artifact: Artifact;
+  active?: boolean;
 }
 
-export default function ChartPreview({ artifact }: ChartPreviewProps) {
+export default function ChartPreview({ artifact, active }: ChartPreviewProps) {
   return (
-    <div className="preview-card">
+    <div className={`preview-card ${active ? "active" : ""}`} data-artifact-id={artifact.id}>
       <div className="cap">
         <span className="name">{artifact.name}</span>
         <span className="meta">{Math.ceil(artifact.size / 1024)} KB</span>

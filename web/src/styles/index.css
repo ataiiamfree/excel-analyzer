@@ -285,6 +285,7 @@ a { color: inherit; text-decoration: none; }
 .tab.active::after { content: ""; position: absolute; left: 0; right: 0; bottom: -1px; height: 2px; background: var(--accent); }
 .panel-body { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 18px 18px 24px; scrollbar-gutter: stable; }
 .preview-card { border: 1px solid var(--rule); border-radius: 12px; overflow: hidden; background: #fff; box-shadow: var(--shadow-card); margin-bottom: 18px; }
+.preview-card.active { border-color: var(--accent); box-shadow: 0 0 0 1px rgba(181,59,30,.2), var(--shadow-card); }
 .preview-card .cap { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--rule); background: var(--bg-elev); font-family: var(--mono); font-size: 11px; color: var(--ink-3); }
 .preview-card .cap .name { color: var(--ink); font-weight: 600; font-family: var(--sans); font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .preview-card .cap .meta { margin-left: auto; color: var(--ink-4); white-space: nowrap; }
@@ -294,6 +295,7 @@ a { color: inherit; text-decoration: none; }
 .chart img { display: block; width: 100%; height: auto; border-radius: 6px; }
 .chart svg { display: block; width: 100%; height: auto; }
 .table-wrap { padding: 0; overflow: auto; max-height: 340px; }
+.modal-table-wrap { flex: 1; min-height: 0; max-height: none; }
 table.dt { width: 100%; border-collapse: collapse; font-size: 12.5px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
 table.dt thead th { position: sticky; top: 0; z-index: 1; background: var(--bg-elev); font-family: var(--mono); font-weight: 600; font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-3); text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--rule-2); }
 table.dt tbody td { padding: 8px 12px; border-bottom: 1px solid var(--rule); }
@@ -304,12 +306,18 @@ table.dt tbody tr:hover { background: var(--accent-soft); }
 .toolbar .pip { font-family: var(--mono); font-size: 10.5px; color: var(--ink-4); }
 .file-list { display: flex; flex-direction: column; gap: 8px; }
 .file-row { display: flex; align-items: center; gap: 12px; padding: 10px 12px; background: #fff; border: 1px solid var(--rule); border-radius: 10px; min-width: 0; }
+.file-row.active { border-color: var(--accent); box-shadow: 0 0 0 1px rgba(181,59,30,.16); }
 .file-row .ico { width: 32px; height: 32px; border-radius: 7px; display: grid; place-items: center; font-family: var(--serif); font-weight: 700; font-size: 11px; color: #fff; flex: none; }
 .file-row .nm { font-size: 13px; font-weight: 500; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 220px; }
 .file-row .mt { font-family: var(--mono); font-size: 10.5px; color: var(--ink-4); margin-top: 1px; }
 .file-row .right { margin-left: auto; display: flex; gap: 4px; }
 .file-row .right a, .file-row .right button { padding: 5px 8px; border-radius: 6px; font-size: 11px; color: var(--ink-3); }
 .file-row .right a:hover, .file-row .right button:hover { background: rgba(20,15,10,.05); color: var(--ink); }
+.artifact-modal { position: fixed; inset: 0; z-index: 40; display: grid; place-items: center; padding: 28px; background: rgba(22,19,16,.28); }
+.artifact-modal-card { width: min(1040px, 100%); max-height: calc(100vh - 56px); min-height: min(640px, calc(100vh - 56px)); display: flex; flex-direction: column; overflow: hidden; background: var(--bg-elev); border: 1px solid var(--rule-2); border-radius: 14px; box-shadow: var(--shadow-pop); }
+.artifact-modal-head { flex: none; display: flex; align-items: center; gap: 12px; justify-content: space-between; padding: 14px 16px; border-bottom: 1px solid var(--rule); }
+.artifact-modal-head .name { font-size: 15px; font-weight: 600; color: var(--ink); }
+.artifact-modal-head .meta { margin-top: 2px; font-family: var(--mono); font-size: 10.5px; color: var(--ink-4); }
 .signature { margin-top: 18px; padding-top: 12px; border-top: 1px solid var(--rule); font-family: var(--mono); font-size: 10px; letter-spacing: .12em; text-transform: uppercase; color: var(--ink-4); display: flex; justify-content: space-between; }
 
 .home-shell { min-height: 100vh; min-height: 100dvh; height: 100vh; height: 100dvh; overflow: hidden; background: var(--bg); display: grid; grid-template-columns: 268px minmax(0, 1fr); }

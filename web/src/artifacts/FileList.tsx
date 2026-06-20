@@ -21,6 +21,7 @@ function iconLabel(kind: string) {
 }
 
 export default function FileList({ artifacts }: FileListProps) {
+  const activeArtifactId = useUiStore((state) => state.activeArtifactId);
   const setActiveArtifactId = useUiStore((state) => state.setActiveArtifactId);
 
   return (
@@ -32,7 +33,11 @@ export default function FileList({ artifacts }: FileListProps) {
       <div style={{ padding: "10px 12px" }}>
         <div className="file-list">
           {artifacts.map((artifact) => (
-            <div className="file-row" key={artifact.id}>
+            <div
+              className={`file-row ${artifact.id === activeArtifactId ? "active" : ""}`}
+              data-artifact-id={artifact.id}
+              key={artifact.id}
+            >
               <span className={`ico ${iconClass(artifact.kind)}`}>{iconLabel(artifact.kind)}</span>
               <div style={{ minWidth: 0 }}>
                 <div className="nm">{artifact.name}</div>
@@ -41,9 +46,11 @@ export default function FileList({ artifacts }: FileListProps) {
                 </div>
               </div>
               <div className="right">
-                <button title="预览" onClick={() => setActiveArtifactId(artifact.id)}>
-                  <Eye size={14} />
-                </button>
+                {isPreviewArtifact(artifact) ? (
+                  <button title="在预览中打开" onClick={() => setActiveArtifactId(artifact.id)}>
+                    <Eye size={14} />
+                  </button>
+                ) : null}
                 <a href={artifact.url} download title="下载">
                   <Download size={14} />
                 </a>
@@ -57,4 +64,8 @@ export default function FileList({ artifacts }: FileListProps) {
       </div>
     </div>
   );
+}
+
+function isPreviewArtifact(artifact: Artifact) {
+  return ["chart", "excel", "csv", "data"].includes(artifact.kind);
 }

@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Download, PanelRightClose } from "lucide-react";
 
 import type { Artifact } from "../api/types";
@@ -14,11 +14,34 @@ interface ArtifactPanelProps {
 export default function ArtifactPanel({ artifacts }: ArtifactPanelProps) {
   const [tab, setTab] = useState<"preview" | "files" | "code">("preview");
   const setArtifactPanelOpen = useUiStore((state) => state.setArtifactPanelOpen);
+  const activeArtifactId = useUiStore((state) => state.activeArtifactId);
   const previewArtifacts = useMemo(
-    () => artifacts.filter((artifact) => ["chart", "excel", "csv", "data"].includes(artifact.kind)),
+    () => artifacts.filter(isPreviewArtifact),
     [artifacts]
   );
-  const codeArtifacts = artifacts.filter((artifact) => artifact.name.endsWith(".py") || artifact.name.endsWith(".md"));
+  const codeArtifacts = useMemo(() => artifacts.filter(isCodeArtifact), [artifacts]);
+  const activeArtifact = useMemo(
+    () => artifacts.find((artifact) => artifact.id === activeArtifactId),
+    [activeArtifactId, artifacts]
+  );
+
+  useEffect(() => {
+    if (tab === "code" && codeArtifacts.length === 0) {
+      setTab("preview");
+    }
+  }, [codeArtifacts.length, tab]);
+
+  useEffect(() => {
+    if (!activeArtifact) return;
+    const nextTab = isPreviewArtifact(activeArtifact) ? "preview" : "files";
+    setTab(nextTab);
+    window.setTimeout(() => {
+      document.querySelector(`[data-artifact-id="${activeArtifact.id}"]`)?.scrollIntoView({
+        block: "start",
+        behavior: "smooth"
+      });
+    }, 0);
+  }, [activeArtifact?.id, activeArtifact?.kind]);
 
   return (
     <aside className="panel">
@@ -35,9 +58,11 @@ export default function ArtifactPanel({ artifacts }: ArtifactPanelProps) {
         <button className={`tab ${tab === "files" ? "active" : ""}`} onClick={() => setTab("files")}>
           文件 <span className="count">{artifacts.length}</span>
         </button>
-        <button className={`tab ${tab === "code" ? "active" : ""}`} onClick={() => setTab("code")}>
-          代码 <span className="count">{codeArtifacts.length}</span>
-        </button>
+        {codeArtifacts.length > 0 ? (
+          <button className={`tab ${tab === "code" ? "active" : ""}`} onClick={() => setTab("code")}>
+            代码 <span className="count">{codeArtifacts.length}</span>
+          </button>
+        ) : null}
       </div>
 
       <div className="panel-body">
@@ -45,9 +70,9 @@ export default function ArtifactPanel({ artifacts }: ArtifactPanelProps) {
           <>
             {previewArtifacts.map((artifact) =>
               artifact.kind === "chart" ? (
-                <ChartPreview key={artifact.id} artifact={artifact} />
+                <ChartPreview key={artifact.id} artifact={artifact} active={artifact.id === activeArtifactId} />
               ) : (
-                <TablePreview key={artifact.id} artifact={artifact} />
+                <TablePreview key={artifact.id} artifact={artifact} active={artifact.id === activeArtifactId} />
               )
             )}
             {previewArtifacts.length === 0 ? <EmptyPanel /> : null}
@@ -58,7 +83,7 @@ export default function ArtifactPanel({ artifacts }: ArtifactPanelProps) {
           <div className="file-list">
             {codeArtifacts.map((artifact) => (
               <div className="file-row" key={artifact.id}>
-                <span className="ico c">MD</span>
+                <span className="ico c">CODE</span>
                 <div>
                   <div className="nm">{artifact.name}</div>
                   <div className="mt">{Math.ceil(artifact.size / 1024)} KB</div>
@@ -79,6 +104,16 @@ export default function ArtifactPanel({ artifacts }: ArtifactPanelProps) {
         </div>
       </div>
     </aside>
+  );
+}
+
+function isPreviewArtifact(artifact: Artifact) {
+  return ["chart", "excel", "csv", "data"].includes(artifact.kind);
+}
+
+function isCodeArtifact(artifact: Artifact) {
+  return [".py", ".sql", ".ipynb", ".r", ".js", ".ts", ".tsx"].some((suffix) =>
+    artifact.name.toLowerCase().endsWith(suffix)
   );
 }
 
