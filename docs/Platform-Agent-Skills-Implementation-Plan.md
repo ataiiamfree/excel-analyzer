@@ -213,7 +213,7 @@ FastAPI
   - `agent_start/agent_end` → synthetic `pi-runtime` step start/end
 - 增加 runtime factory：
   - 固定返回 `PiSidecarRuntimeAdapter`。
-  - 保留 `PI_COMMAND`、`PI_ARGS`、`PI_CWD`、`PI_PROVIDER` 和 `PI_MODEL` 作为 Pi sidecar 配置。
+  - 保留 `PI_COMMAND`、`PI_ARGS`、`PI_CWD`、`PI_PROVIDER`、`PI_MODEL` 和 `PI_STREAM_LIMIT_BYTES` 作为 Pi sidecar 配置。
   - 不再提供 `AGENT_RUNTIME` 或 `AGENT_RUNTIME_FALLBACK`；Pi 失败时由 API 返回失败事件。
 - 选择少量场景跑 A/B：
   - 普通表格统计。

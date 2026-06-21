@@ -60,6 +60,7 @@ class PiRpcTransport:
         command: list[str],
         cwd: str | None = None,
         env: dict[str, str] | None = None,
+        stream_limit_bytes: int = 16 * 1024 * 1024,
         process_factory: Callable[..., Awaitable[Any]] | None = None,
     ):
         if not command:
@@ -67,6 +68,7 @@ class PiRpcTransport:
         self.command = command
         self.cwd = cwd
         self.env = env
+        self.stream_limit_bytes = stream_limit_bytes
         self.process_factory = process_factory
 
     async def run(self, payload: dict[str, Any], event_handler: PiEventHandler) -> dict[str, Any]:
@@ -120,6 +122,7 @@ class PiRpcTransport:
                 stderr=asyncio.subprocess.PIPE,
                 cwd=self.cwd,
                 env=self.env,
+                limit=self.stream_limit_bytes,
             )
         except FileNotFoundError as exc:
             raise RuntimeUnavailableError(f"Pi command not found: {self.command[0]}") from exc
@@ -412,7 +415,12 @@ def build_pi_rpc_transport(config: Any) -> PiRpcTransport:
     if model:
         command.extend(["--model", model])
     env = os.environ.copy()
-    return PiRpcTransport(command=command, cwd=str(getattr(config, "pi_cwd", "") or os.getcwd()), env=env)
+    return PiRpcTransport(
+        command=command,
+        cwd=str(getattr(config, "pi_cwd", "") or os.getcwd()),
+        env=env,
+        stream_limit_bytes=int(getattr(config, "pi_stream_limit_bytes", 16 * 1024 * 1024)),
+    )
 
 
 def _tool_payload(tool: Any) -> dict[str, Any]:

@@ -47,3 +47,6 @@ class Config:
     pi_cwd: str = field(default_factory=lambda: os.getenv("PI_CWD", "."))
     pi_provider: str = field(default_factory=lambda: os.getenv("PI_PROVIDER", ""))
     pi_model: str = field(default_factory=lambda: os.getenv("PI_MODEL", ""))
+    pi_stream_limit_bytes: int = field(
+        default_factory=lambda: int(os.getenv("PI_STREAM_LIMIT_BYTES", str(16 * 1024 * 1024)))
+    )

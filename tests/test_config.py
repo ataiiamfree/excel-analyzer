@@ -13,7 +13,7 @@ def test_deepseek_defaults_are_aligned():
         "SANDBOX_MEMORY_MB", "MAX_STDOUT_CHARS", "MAX_REPAIR_ATTEMPTS",
         "MAX_FILE_SIZE_MB", "MAX_CONCURRENT_TASKS",
         "PI_COMMAND", "PI_ARGS",
-        "PI_CWD", "PI_PROVIDER", "PI_MODEL",
+        "PI_CWD", "PI_PROVIDER", "PI_MODEL", "PI_STREAM_LIMIT_BYTES",
     ]
     clean_env = {k: v for k, v in os.environ.items() if k not in env_keys}
     with patch.dict(os.environ, clean_env, clear=True):
@@ -27,6 +27,7 @@ def test_deepseek_defaults_are_aligned():
     assert config.budget_preset == "deepseek"
     assert config.pi_command == "pi"
     assert config.pi_args == "--mode rpc --no-session"
+    assert config.pi_stream_limit_bytes == 16 * 1024 * 1024
 
 
 def test_env_override():
@@ -42,6 +43,7 @@ def test_env_override():
         "PI_ARGS": "--mode rpc --no-session --no-color",
         "PI_PROVIDER": "openai",
         "PI_MODEL": "openai/gpt-5",
+        "PI_STREAM_LIMIT_BYTES": "2097152",
     }
     with patch.dict(os.environ, overrides):
         config = Config()
@@ -57,3 +59,4 @@ def test_env_override():
     assert config.pi_args == "--mode rpc --no-session --no-color"
     assert config.pi_provider == "openai"
     assert config.pi_model == "openai/gpt-5"
+    assert config.pi_stream_limit_bytes == 2097152

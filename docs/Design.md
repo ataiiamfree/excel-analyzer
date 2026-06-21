@@ -1882,6 +1882,7 @@ class UserMemory:
 - `app/agent/artifact_qa.py` 提供产物问答能力。它从 artifact manifest 中按文件名或关键词匹配产物，读取 producer step、source tables、script path、stdout summary 和图表元信息，解释图表/导出表/报告的含义。
 - `app/agent/runtime.py` 只保留 Python 侧 Pi runtime 边界：`AgentRuntimeAdapter`、`PiSidecarRuntimeAdapter` 和 `PiRpcTransport`。API 层固定通过 Pi RPC sidecar 调用 agent，不再提供旧 Orchestrator runtime 或 fallback 开关。
 - `app/agent/types.py` 提供 `StepResult`、`TaskResult` 等轻量结果类型，避免新 runtime 为共享数据结构反向依赖旧 Orchestrator 模块。
+- `PiRpcTransport` 通过 `PI_STREAM_LIMIT_BYTES` 显式放大 stdout JSONL 读取上限，默认 16MB，避免复杂分析时单个 Pi event 超过 `asyncio` 默认 64KB 行限制。
 - Pi runtime 使用 `<<FINAL_REPORT>>` 作为最终报告 marker。marker 之前的 `message_update.text_delta` 会进入 reasoning，不写入报告；marker 之后的文本才会写入 `report.delta`，避免执行过程污染最终报告。
 - `app/agent/pi_tool_service.py` 是 Pi 调用 Python typed tools 的命令行桥。Pi 负责主 agent loop、规划和最终表达；Excel 解析、sandbox、结果校验和 Artifact Graph 写入仍由 Python 后端工具执行。
 - `Workspace.register_artifact()` 和 API persistence 已扩展 Artifact Graph v1 字段，包括 `artifact_id`、`producer_step_id`、`producer_tool`、`input_artifact_ids`、`source_tables`、`script_path`、`stdout_summary`、`chart_metadata` 和 `sha256`。

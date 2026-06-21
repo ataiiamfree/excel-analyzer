@@ -10,6 +10,7 @@ from app.agent.runtime import (
     PiSidecarRuntimeAdapter,
     RuntimeRequest,
     build_agent_runtime,
+    build_pi_rpc_transport,
 )
 from app.config import Config
 
@@ -252,3 +253,14 @@ def test_pi_rpc_transport_sends_prompt_and_reads_agent_events():
     assert process_holder["command"] == ["pi", "--mode", "rpc", "--no-session"]
     assert [event["type"] for event in seen] == ["agent_start", "agent_end"]
     assert result["event_count"] == 2
+
+
+def test_pi_rpc_transport_uses_configured_stream_limit(tmp_path):
+    config = Config(
+        workspace_dir=str(tmp_path),
+        pi_stream_limit_bytes=2 * 1024 * 1024,
+    )
+
+    transport = build_pi_rpc_transport(config)
+
+    assert transport.stream_limit_bytes == 2 * 1024 * 1024
