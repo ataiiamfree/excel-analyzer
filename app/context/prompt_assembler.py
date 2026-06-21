@@ -98,6 +98,8 @@ class PromptAssembler:
     def _build_sections(self, context: TaskContext, current_step: Step) -> list[PromptSection]:
         sections = [
             PromptSection("system", self._load_system_prompt(current_step.tool)),
+            PromptSection("skill", f"## Skill 约束\n{context.skill_instructions}")
+            if context.skill_instructions else PromptSection("skill", ""),
             PromptSection("user_query", f"## 用户问题\n{context.user_query}"),
             PromptSection(
                 "profile",
@@ -308,6 +310,9 @@ class PromptAssembler:
                 "报装容量 可匹配 增减容量/新减增容量(kVA)。"
                 "把图表和明细写入 output/，用 print 输出摘要和口径。"
             )
-        if tool == "knowledge":
-            return "你是知识检索助手。只返回与当前步骤相关的来源和摘要。"
+        if tool == "artifact_qa":
+            return (
+                "你是办公数据分析产物解释助手。解释必须基于当前会话 artifact manifest、"
+                "生成步骤、脚本、stdout 摘要和图表元数据；不要编造未出现的数据口径。"
+            )
         return f"你是 {tool} 执行助手。"

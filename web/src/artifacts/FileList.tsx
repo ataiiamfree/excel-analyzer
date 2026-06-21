@@ -16,6 +16,7 @@ function iconClass(kind: string) {
 function iconLabel(kind: string) {
   if (kind === "chart") return "IMG";
   if (kind === "csv") return "CSV";
+  if (kind === "normalized_table") return "TBL";
   if (kind === "report") return "MD";
   return "XL";
 }
@@ -44,6 +45,12 @@ export default function FileList({ artifacts }: FileListProps) {
                 <div className="mt">
                   {Math.ceil(artifact.size / 1024)} KB · {new Date(artifact.created_at).toLocaleTimeString("zh-CN")}
                 </div>
+                {artifact.producer_step_id || artifact.source_tables?.length ? (
+                  <div className="mt">
+                    {artifact.producer_step_id ? `来源 ${artifact.producer_step_id}` : "来源"}
+                    {artifact.source_tables?.length ? ` · ${artifact.source_tables.slice(0, 2).join("、")}` : ""}
+                  </div>
+                ) : null}
               </div>
               <div className="right">
                 {isPreviewArtifact(artifact) ? (
@@ -67,5 +74,5 @@ export default function FileList({ artifacts }: FileListProps) {
 }
 
 function isPreviewArtifact(artifact: Artifact) {
-  return ["chart", "excel", "csv", "data"].includes(artifact.kind);
+  return ["chart", "excel", "csv", "data", "normalized_table"].includes(artifact.kind);
 }

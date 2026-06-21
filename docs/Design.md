@@ -1870,3 +1870,16 @@ class UserMemory:
         self.data["recent_sessions"] = self.data["recent_sessions"][-50:]
         self._save()
 ```
+
+## 10. 平台化 Agent 扩展（当前探索分支）
+
+当前探索分支在保留原有 Excel 分析能力的前提下，加入了面向办公数据分析平台的 agent 骨架：
+
+- `app/tools/registry.py` 定义 `ToolSpec`、`ToolCall`、`ToolResult` 和 `ToolRegistry`。Planner 只能使用 registry 中开放给当前 skill 的工具，未注册工具会在规划校验时被拒绝。
+- `app/skills/registry.py` 定义 `SkillSpec`、`SkillRegistry` 和 `IntentRouter`。系统会根据用户问题、已生成产物和文件上下文选择 `spreadsheet_analysis`、`artifact_qa` 或 `report_generation`。
+- `skills/*/SKILL.md` 保存可演进的流程约束。Skill 约束会进入 planning prompt，用来约束工具选择、数据口径、产物登记和结果校验。
+- `app/agent/artifact_qa.py` 提供产物问答能力。它从 artifact manifest 中按文件名或关键词匹配产物，读取 producer step、source tables、script path、stdout summary 和图表元信息，解释图表/导出表/报告的含义。
+- `app/agent/runtime.py` 提供 `AgentRuntimeAdapter`、`OrchestratorRuntimeAdapter` 和 `PiSidecarRuntimeAdapter`。API 层通过 runtime adapter 调用 agent，后续可以把通用 agent loop 切到 Pi sidecar，同时保留 Python 后端的沙箱、路径保护和工具边界。
+- `Workspace.register_artifact()` 和 API persistence 已扩展 Artifact Graph v1 字段，包括 `artifact_id`、`producer_step_id`、`producer_tool`、`input_artifact_ids`、`source_tables`、`script_path`、`stdout_summary`、`chart_metadata` 和 `sha256`。
+
+这部分实现的边界是：Pi sidecar 目前是可测试 adapter 骨架，真实 Pi harness 接入仍需要后续 RPC/SDK transport；Milestone 7 中的非 Excel 数据源和更多办公输出形态尚未展开。

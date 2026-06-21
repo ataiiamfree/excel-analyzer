@@ -8,7 +8,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 
-ArtifactKind = Literal["chart", "excel", "csv", "report", "file", "data"]
+ArtifactKind = Literal["chart", "excel", "csv", "report", "file", "data", "normalized_table"]
 MessageRole = Literal["user", "assistant"]
 RunStatus = Literal["running", "done", "failed", "cancelled"]
 
@@ -66,11 +66,20 @@ class ArtifactOut(BaseModel):
     preview_url: str | None = None
     sha256_url: str | None = None
     sha256: str | None = None
+    description: str | None = None
+    producer_step_id: str | None = None
+    producer_tool: str | None = None
+    input_artifact_ids: list[str] = Field(default_factory=list)
+    source_tables: list[str] = Field(default_factory=list)
+    script_path: str | None = None
+    stdout_summary: str | None = None
+    row_count: int | None = None
+    chart_metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class PlanStepPayload(BaseModel):
     id: str
-    tool: Literal["python", "knowledge"] | str = "python"
+    tool: Literal["python", "artifact_qa"] | str = "python"
     description: str = ""
     instruction: str = ""
     depends_on: list[str] = Field(default_factory=list)

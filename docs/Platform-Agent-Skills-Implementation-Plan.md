@@ -47,6 +47,22 @@ Agent Runtime 替换 Orchestrator 核心循环
 - 先把领域工具稳定化，再替换 agent runtime。
 - 不把安全边界交给 LLM 或外部 harness。
 
+### 3.1 当前分支实现状态
+
+本探索分支已实现 Milestone 1 到 Milestone 6 的 v1 能力，Milestone 7 暂不实现：
+
+| Milestone | 状态 | 主要落地文件 |
+|---|---|---|
+| M1 工具协议与注册表 | 已实现 | `app/tools/registry.py`、`app/agent/orchestrator.py` |
+| M2 Artifact Graph v1 | 已实现 | `app/workspace.py`、`app/api/persistence/store.py`、`app/api/artifact_utils.py` |
+| M3 Artifact QA | 已实现 | `app/agent/artifact_qa.py`、`tests/test_artifact_qa.py` |
+| M4 Skills v1 | 已实现 | `app/skills/registry.py`、`skills/*/SKILL.md` |
+| M5 Pi / Harness Sidecar 试点 | 已实现 adapter 骨架 | `app/agent/runtime.py`、`tests/test_agent_runtime.py` |
+| M6 Agent Runtime 替换入口 | 已实现 v1 | `app/api/ws/runner.py` 通过 `AgentRuntimeAdapter` 调用后端 agent |
+| M7 办公场景扩展 | 未实现 | 后续再扩展非 Excel 数据源和更多输出形态 |
+
+M6 当前不是完整 Pi 替换，而是先把 API 层与具体 Orchestrator 解耦，形成可回退的 runtime 接口。通用 planning/tool loop 的进一步迁移应在 sidecar 真实接入和评测稳定后继续推进。
+
 ## 四、Milestone 1：工具协议与注册表
 
 ### 目标

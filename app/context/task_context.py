@@ -42,6 +42,8 @@ class TaskContext:
     data_profile: dict[str, Any]
     budget_preset: str = "deepseek"
     plan: ExecutionPlan | None = None
+    selected_skill: str = "spreadsheet_analysis"
+    skill_instructions: str = ""
     step_summaries: OrderedDict[str, str] = field(default_factory=OrderedDict)
     key_findings: list[str] = field(default_factory=list)
     workspace_files: list[dict[str, Any]] = field(default_factory=list)

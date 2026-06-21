@@ -145,7 +145,7 @@ def test_orchestrator_unknown_tool():
     result = asyncio.run(orchestrator.run_plan(plan, context, workspace))
 
     assert plan.get_step("s1").status == "failed"
-    assert "未注册的 skill 类型" in plan.get_step("s1").error
+    assert "未注册的工具" in plan.get_step("s1").error
 
 
 # ── Adaptive 测试 ──
@@ -440,6 +440,63 @@ def test_parse_plan_from_json():
     assert plan.steps[0].id == "s1"
     assert plan.steps[1].depends_on == ["s1"]
     assert len(plan.report_outline) == 1
+
+
+def test_parse_plan_unknown_tool_falls_back_to_python():
+    orch = Orchestrator(llm_client=None, tools=None, config=_make_config())
+    response = json.dumps({
+        "steps": [
+            {"id": "s1", "tool": "knowledge", "description": "解释", "instruction": "解释文件"},
+        ],
+        "report_outline": [],
+    })
+
+    plan = orch._parse_plan(response, fallback_instruction="解释文件")
+
+    assert len(plan.steps) == 1
+    assert plan.steps[0].tool == "python"
+    assert plan.steps[0].instruction == "解释文件"
+
+
+def test_plan_routes_artifact_followup_to_artifact_qa(tmp_path):
+    orch = Orchestrator(llm_client=None, tools=None, config=_make_config())
+    context = TaskContext("t1", "解释 trend.png 的含义", {}, {}, selected_skill="artifact_qa")
+    session = Session.create(file_path="input.xlsx")
+    context.artifact_manifest = [{"kind": "chart", "name": "trend.png", "path": "output/trend.png"}]
+
+    plan = asyncio.run(orch._plan(context, session))
+
+    assert len(plan.steps) == 1
+    assert plan.steps[0].tool == "artifact_qa"
+
+
+def test_execute_artifact_qa_uses_manifest_and_script():
+    step = Step(id="s1", tool="artifact_qa", description="解释产物", instruction="解释 trend.png")
+    context = TaskContext("t1", "解释 trend.png", {}, {})
+    context.artifact_manifest = [
+        {
+            "kind": "chart",
+            "name": "trend.png",
+            "path": "output/trend.png",
+            "producer_step_id": "s0",
+            "producer_tool": "python",
+            "source_tables": ["巡检记录"],
+            "script_path": "scripts/s0_attempt_0.py",
+            "stdout_summary": "发现温度异常 3 个。",
+        }
+    ]
+
+    class ArtifactWorkspace(FakeWorkspace):
+        def read_text(self, path):
+            return 'import matplotlib.pyplot as plt\nplt.title("温度趋势")\nplt.savefig("output/trend.png")'
+
+    orch = Orchestrator(llm_client=None, tools=SimpleNamespace(checker=FakeChecker()), config=_make_config())
+
+    result = asyncio.run(orch._execute_step(step, context, ArtifactWorkspace()))
+
+    assert result.success
+    assert "温度趋势" in result.stdout
+    assert "巡检记录" in result.stdout
 
 
 def test_parse_plan_drops_report_outline_for_result_task():

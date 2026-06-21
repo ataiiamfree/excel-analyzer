@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import shutil
 import uuid
 from dataclasses import asdict, is_dataclass
@@ -78,15 +79,26 @@ class Workspace:
     def save_artifacts(self, tables: list[Any]) -> None:
         manifest = self.read_artifact_manifest()
         for table in tables:
+            path = getattr(table, "parquet_path", "")
             manifest.append(
                 {
-                    "path": getattr(table, "parquet_path", ""),
+                    "artifact_id": f"tbl_{uuid.uuid4().hex}",
+                    "name": Path(path).name if path else getattr(table, "table_id", ""),
+                    "path": path,
                     "kind": "normalized_table",
                     "description": getattr(table, "table_id", ""),
+                    "producer_step_id": "preprocess",
                     "producer_step": "preprocess",
+                    "producer_tool": "spreadsheet.normalize_tables",
                     "inputs": [getattr(table, "source_file", "")],
+                    "input_artifact_ids": [],
+                    "source_tables": [getattr(table, "table_id", "")],
                     "schema": getattr(table, "columns", []),
                     "row_count": getattr(table, "row_count", None),
+                    "script_path": None,
+                    "stdout_summary": "",
+                    "chart_metadata": {},
+                    "sha256": self._sha256_if_exists(path),
                     "created_at": datetime.now(timezone.utc).isoformat(),
                 }
             )
@@ -99,21 +111,53 @@ class Workspace:
         producer_step: str,
         description: str = "",
         inputs: list[str] | None = None,
+        *,
+        producer_tool: str | None = None,
+        input_artifact_ids: list[str] | None = None,
+        source_tables: list[str] | None = None,
+        script_path: str | None = None,
+        stdout_summary: str = "",
+        schema: Any = None,
+        row_count: int | None = None,
+        chart_metadata: dict[str, Any] | None = None,
+        artifact_id: str | None = None,
     ) -> None:
-        """注册单个产物（图表、导出文件等）到 artifact manifest。"""
+        """注册单个产物（图表、导出文件等）到 artifact graph manifest."""
         manifest = self.read_artifact_manifest()
+        name = Path(path).name
         manifest.append({
+            "artifact_id": artifact_id or f"art_{uuid.uuid4().hex}",
+            "name": name,
             "path": path,
             "kind": kind,
             "description": description,
+            "producer_step_id": producer_step,
             "producer_step": producer_step,
+            "producer_tool": producer_tool or self._default_producer_tool(producer_step),
             "inputs": inputs or [],
+            "input_artifact_ids": input_artifact_ids or [],
+            "source_tables": source_tables or [],
+            "script_path": script_path,
+            "stdout_summary": stdout_summary,
+            "schema": schema,
+            "row_count": row_count,
+            "chart_metadata": chart_metadata or {},
+            "sha256": self._sha256_if_exists(path),
             "created_at": datetime.now(timezone.utc).isoformat(),
         })
         self.save_json("artifact_manifest.json", manifest)
 
     def read_artifact_manifest(self) -> list[dict[str, Any]]:
         return self.read_json("artifact_manifest.json", []) or []
+
+    def find_artifact_by_path(self, path: str) -> dict[str, Any] | None:
+        target = str(path)
+        target_name = Path(target).name
+        for item in reversed(self.read_artifact_manifest()):
+            item_path = str(item.get("path") or "")
+            if item_path == target or Path(item_path).name == target_name:
+                return item
+        return None
 
     def list_files(self) -> list[dict[str, Any]]:
         files = []
@@ -144,6 +188,27 @@ class Workspace:
         target = self.path / name
         if not target.exists():
             self.save_json(name, default)
+
+    def _default_producer_tool(self, producer_step: str) -> str:
+        if producer_step == "reporter":
+            return "report.generate"
+        if producer_step == "preprocess":
+            return "spreadsheet.normalize_tables"
+        return "python"
+
+    def _sha256_if_exists(self, path: str | Path | None) -> str | None:
+        if not path:
+            return None
+        target = Path(path)
+        if not target.is_absolute():
+            target = self.path / target
+        if not target.exists() or not target.is_file():
+            return None
+        digest = hashlib.sha256()
+        with target.open("rb") as fh:
+            for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
 
     def cleanup(self, keep_recent: int = 5) -> list[str]:
         """清理过期任务目录，保留最近 N 个任务。返回被删除的 task_id 列表。"""

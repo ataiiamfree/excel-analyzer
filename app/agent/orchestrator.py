@@ -14,12 +14,15 @@ import json
 import logging
 from pathlib import Path
 
+from app.agent.artifact_qa import ArtifactExplainer
 from app.agent.plan import ExecutionPlan, PlanAdjustment, Step
 from app.agent.reporter import Reporter
 from app.context.prompt_assembler import PromptAssembler
 from app.context.task_context import TaskContext
 from app.session import Session
+from app.skills.registry import IntentRouter, SkillRegistry, build_default_skill_registry
 from app.tools.result_checker import CheckResult
+from app.tools.registry import ToolRegistry, build_default_tool_registry
 from app.workspace import Workspace
 
 logger = logging.getLogger(__name__)
@@ -98,15 +101,27 @@ Executor = Callable[[Step, TaskContext, Any, TokenCallback | None], Awaitable[St
 
 
 class Orchestrator:
-    def __init__(self, llm_client: Any, tools: Any, config: Any):
+    def __init__(
+        self,
+        llm_client: Any,
+        tools: Any,
+        config: Any,
+        *,
+        tool_registry: ToolRegistry | None = None,
+        skill_registry: SkillRegistry | None = None,
+    ):
         self.llm = llm_client
         self.tools = tools
         self.config = config
         self.assembler = PromptAssembler()
         self.reporter = Reporter(llm_client=llm_client)
+        self.tool_registry = tool_registry or build_default_tool_registry()
+        self.skill_registry = skill_registry or build_default_skill_registry()
+        self.intent_router = IntentRouter(self.skill_registry)
+        self.artifact_explainer = ArtifactExplainer()
         self.executors: dict[str, Executor] = {
             "python": self._execute_python,
-            "knowledge": self._execute_knowledge,
+            "artifact_qa": self._execute_artifact_qa,
         }
 
     # ------------------------------------------------------------------
@@ -173,11 +188,21 @@ class Orchestrator:
             data_profile=profile,
             budget_preset=self.config.budget_preset,
         )
+        context.update_artifacts(workspace.read_artifact_manifest())
+        context.update_workspace_files(workspace.list_files())
 
         # 追问时注入前序上下文
         if session.is_follow_up:
             follow_up = session.build_follow_up_context()
             context.key_findings = follow_up.get("prior_findings", [])
+
+        selected_skill = self.intent_router.route(
+            query,
+            artifacts=context.artifact_manifest,
+            has_file=bool(session.file_path),
+        )
+        context.selected_skill = selected_skill.name
+        context.skill_instructions = selected_skill.prompt_block()
 
         # LLM 规划（_plan 内部已有 fallback，不会抛异常）
         logger.info("开始 LLM 规划...")
@@ -213,7 +238,20 @@ class Orchestrator:
 
     async def _plan(self, context: TaskContext, session: Session) -> ExecutionPlan:
         """Call LLM to generate an execution plan."""
+        if context.selected_skill == "artifact_qa":
+            return ExecutionPlan(steps=[
+                Step(
+                    id="s1",
+                    tool="artifact_qa",
+                    description="解释已生成产物",
+                    instruction=context.user_query,
+                    is_exploratory=False,
+                )
+            ])
+
         profile_text = self.assembler.format_profile_for_prompt(context.data_profile)
+        tool_prompt = self.tool_registry.planner_prompt(context.selected_skill)
+        skill_section = context.skill_instructions
 
         follow_up_section = ""
         if session.is_follow_up:
@@ -229,8 +267,10 @@ class Orchestrator:
             "你是数据分析规划器。根据用户需求和数据概况，输出 JSON 格式的执行计划。\n"
             "只输出一个 JSON 对象，不要解释，不要输出思考过程，不要输出 markdown。\n\n"
             f"## 用户需求\n{context.user_query}\n\n"
+            f"## Skill 约束\n{skill_section}\n\n"
             f"## 数据概况\n{profile_text}\n"
             f"{follow_up_section}\n"
+            f"## 可用工具\n{tool_prompt}\n\n"
             "## 输出格式\n"
             "返回 JSON：\n"
             "```json\n"
@@ -242,7 +282,7 @@ class Orchestrator:
             '    {"title": "...", "related_steps": ["s1"], "word_count": 800}\n'
             "  ]\n"
             "}\n```\n"
-            "tool 只能是 python 或 knowledge。\n"
+            "tool 必须从“可用工具”中选择，禁止输出未列出的工具。\n"
             "确保 steps 按执行顺序排列，depends_on 引用已有 step id。\n"
             "普通统计、筛选、排名、导出结果表、生成图表的问题，report_outline 必须返回 []；"
             "最终由系统展示表格/图表并给一两句简短结论。\n"
@@ -352,9 +392,13 @@ class Orchestrator:
         steps = []
         for item in data.get("steps", []):
             if isinstance(item, dict) and item.get("id"):
+                tool_name = self.tool_registry.normalize_name(item.get("tool", "python"))
+                if not self.tool_registry.has(tool_name):
+                    logger.warning("Planner 返回未注册工具，已跳过: %s", item.get("tool"))
+                    continue
                 steps.append(Step(
                     id=item["id"],
-                    tool=item.get("tool", "python"),
+                    tool=tool_name,
                     description=item.get("description", ""),
                     instruction=item.get("instruction", ""),
                     depends_on=item.get("depends_on", []),
@@ -362,6 +406,16 @@ class Orchestrator:
                 ))
         outline = self._report_outline_for_query(data, user_query)
         steps = self._collapse_result_steps_if_needed(steps, user_query, outline)
+        if data.get("steps") and not steps:
+            return ExecutionPlan(steps=[
+                Step(
+                    id="s1",
+                    tool="python",
+                    description="分析数据",
+                    instruction=user_query or "根据用户需求完成数据分析并输出结果。",
+                    is_exploratory=True,
+                )
+            ], report_outline=outline)
         return ExecutionPlan(steps=steps, report_outline=outline)
 
     def _collapse_result_steps_if_needed(
@@ -495,7 +549,20 @@ class Orchestrator:
                     path=fpath,
                     kind=self._infer_artifact_kind(fpath),
                     producer_step=step.id,
+                    producer_tool=step.tool,
                     description=step.description,
+                    script_path=result.script_path,
+                    stdout_summary=context._extract_summary(result.stdout, 1200),
+                    input_artifact_ids=[
+                        item.get("artifact_id")
+                        for item in context.artifact_manifest
+                        if item.get("kind") == "normalized_table" and item.get("artifact_id")
+                    ],
+                    source_tables=[
+                        str(item.get("description") or item.get("name") or item.get("path"))
+                        for item in context.artifact_manifest
+                        if item.get("kind") == "normalized_table"
+                    ],
                 )
 
             logger.info("✓ Step %s 完成, 产出文件=%d, stdout=%d chars",
@@ -536,7 +603,14 @@ class Orchestrator:
             path="output/report.md",
             kind="report",
             producer_step="reporter",
+            producer_tool="report.generate",
             description="分析报告",
+            stdout_summary=report[:1200],
+            input_artifact_ids=[
+                item.get("artifact_id")
+                for item in context.artifact_manifest
+                if item.get("artifact_id")
+            ],
         )
 
         workspace.write_state(status="completed", current_step=None)
@@ -549,6 +623,16 @@ class Orchestrator:
         workspace: Any,
         reasoning_callback: TokenCallback | None = None,
     ) -> StepResult:
+        tool_name = self.tool_registry.normalize_name(step.tool)
+        if not self.tool_registry.has(tool_name):
+            return StepResult(
+                stdout="",
+                files=[],
+                failed=True,
+                error=f"未注册的工具: {step.tool}",
+                retries_exhausted=True,
+            )
+        step.tool = tool_name
         executor = self.executors.get(step.tool)
         if executor is None:
             return StepResult(
@@ -570,15 +654,19 @@ class Orchestrator:
                 retries_exhausted=True,
             )
 
-    async def _execute_knowledge(
+    async def _execute_artifact_qa(
         self,
         step: Step,
         context: TaskContext,
         workspace: Any,
         reasoning_callback: TokenCallback | None = None,
     ) -> StepResult:
-        chunks = self.tools.knowledge.search(step.instruction, top_k=3)
-        return StepResult(stdout=str(chunks), files=[])
+        explanation = self.artifact_explainer.explain(
+            step.instruction or context.user_query,
+            workspace,
+            context.artifact_manifest or workspace.read_artifact_manifest(),
+        )
+        return StepResult(stdout=explanation, files=[])
 
     async def _execute_python(
         self,

@@ -435,6 +435,22 @@ Artifact Graph 需要回答：
 | FastAPI WebSocket events | EventStream v0 |
 | React Artifact Panel | Artifact experience v0 |
 
+### 10.1 当前探索分支实现映射
+
+本分支已经把平台化骨架落到代码中，保留现有 Excel 分析链路作为默认执行路径：
+
+| 平台化组件 | 当前实现 |
+|---|---|
+| ToolRegistry | `app/tools/registry.py`，注册 planner-visible 的 `python`、`artifact_qa`，同时保留 typed tool alias |
+| Skills v1 | `app/skills/registry.py` 和 `skills/*/SKILL.md` |
+| Intent Router | 基于用户 query、当前 artifact manifest 和文件上下文选择 `spreadsheet_analysis`、`artifact_qa` 或 `report_generation` |
+| Artifact Graph v1 | `Workspace.register_artifact()` 扩展 metadata，API persistence 增加 `metadata` JSON 字段 |
+| Artifact QA | `app/agent/artifact_qa.py`，按文件名/血缘/脚本提示解释已生成产物 |
+| Agent Runtime v1 | `app/agent/runtime.py`，FastAPI runner 通过 runtime adapter 调用 Orchestrator，并预留 Pi sidecar transport |
+| Artifact Panel | 前端 artifact 类型和列表展示支持 producer/source metadata、normalized table 预览 |
+
+当前实现仍把 Python sandbox、Excel 预处理、结果校验和报告生成留在 Python 后端。Pi sidecar 是可测试适配层，后续可替换通用 agent loop，但不能绕过后端 typed tools 和 Artifact Graph。
+
 ## 十一、设计原则
 
 - Harness 通用化，工具领域化。

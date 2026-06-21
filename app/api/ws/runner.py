@@ -9,9 +9,10 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable
 
 from app.agent.orchestrator import StepResult, build_orchestrator
+from app.agent.runtime import OrchestratorRuntimeAdapter, RuntimeRequest
 from app.agent.next_actions import generate_next_actions
 from app.agent.plan import ExecutionPlan, Step
-from app.api.artifact_utils import artifact_urls, infer_artifact_kind, sha256_file
+from app.api.artifact_utils import artifact_metadata_from_manifest, artifact_urls, infer_artifact_kind, sha256_file
 from app.api.deps import SessionRegistry
 from app.api.persistence.store import Store
 from app.api.schemas import RunArtifact, RunResult
@@ -102,6 +103,22 @@ def artifact_out(row: dict[str, Any]) -> dict[str, Any]:
         "sha256": row.get("sha256"),
         **artifact_urls(row["id"], row["kind"]),
     }
+    metadata = row.get("metadata") or {}
+    if isinstance(metadata, dict):
+        data.update(metadata)
+    for key in (
+        "description",
+        "producer_step_id",
+        "producer_tool",
+        "input_artifact_ids",
+        "source_tables",
+        "script_path",
+        "stdout_summary",
+        "row_count",
+        "chart_metadata",
+    ):
+        if key in row and key not in data:
+            data[key] = row.get(key)
     return data
 
 
@@ -190,6 +207,7 @@ async def _run_query(
 
     await emitter.emit(RunStartEvent(seq=0, message_id=assistant_message_id))
     orchestrator = build_orchestrator(config)
+    agent_runtime = OrchestratorRuntimeAdapter(orchestrator)
 
     async def persist_payload() -> None:
         if persist_messages:
@@ -271,14 +289,18 @@ async def _run_query(
 
     try:
         task_result = await asyncio.wait_for(
-            orchestrator.run(
-                query=query,
-                session=session,
-                on_step_start=on_step_start,
-                on_step_end=on_step_end,
-                on_plan_ready=on_plan_ready,
-                on_report_token=on_report_token,
-                on_reasoning_token=on_reasoning_token,
+            agent_runtime.run(
+                RuntimeRequest(
+                    query=query,
+                    session=session,
+                    callbacks={
+                        "on_step_start": on_step_start,
+                        "on_step_end": on_step_end,
+                        "on_plan_ready": on_plan_ready,
+                        "on_report_token": on_report_token,
+                        "on_reasoning_token": on_reasoning_token,
+                    },
+                )
             ),
             timeout=config.run_timeout_seconds,
         )
@@ -314,6 +336,8 @@ async def _run_query(
             continue
         kind = infer_artifact_kind(path)
         sha = sha256_file(path)
+        manifest_item = workspace.find_artifact_by_path(stored_path)
+        metadata = artifact_metadata_from_manifest(manifest_item)
         row = store.create_artifact(
             conversation_id=conversation_id,
             message_id=assistant_message_id if persist_messages else None,
@@ -322,6 +346,7 @@ async def _run_query(
             name=path.name,
             size=path.stat().st_size,
             sha256=sha,
+            metadata=metadata,
         )
         artifact_ids.append(row["id"])
         artifact = artifact_out(row)

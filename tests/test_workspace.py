@@ -47,6 +47,9 @@ def test_workspace_register_artifact(tmp_path: Path):
     manifest = workspace.read_artifact_manifest()
     assert len(manifest) == 1
     assert manifest[0]["kind"] == "chart"
+    assert manifest[0]["artifact_id"].startswith("art_")
+    assert manifest[0]["producer_step_id"] == "s1"
+    assert manifest[0]["producer_tool"] == "python"
     assert manifest[0]["created_at"] is not None
 
 

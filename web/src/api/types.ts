@@ -1,5 +1,5 @@
 export type RunStatus = "running" | "done" | "failed" | "cancelled";
-export type ArtifactKind = "chart" | "excel" | "csv" | "report" | "file" | "data";
+export type ArtifactKind = "chart" | "excel" | "csv" | "report" | "file" | "data" | "normalized_table";
 
 export interface Conversation {
   id: string;
@@ -85,6 +85,15 @@ export interface Artifact {
   preview_url?: string | null;
   sha256_url?: string | null;
   sha256?: string | null;
+  description?: string | null;
+  producer_step_id?: string | null;
+  producer_tool?: string | null;
+  input_artifact_ids?: string[];
+  source_tables?: string[];
+  script_path?: string | null;
+  stdout_summary?: string | null;
+  row_count?: number | null;
+  chart_metadata?: Record<string, unknown>;
 }
 
 export interface TablePreview {

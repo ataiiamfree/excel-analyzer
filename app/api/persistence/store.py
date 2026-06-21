@@ -66,12 +66,19 @@ class Store:
                     name TEXT NOT NULL,
                     size INTEGER NOT NULL,
                     sha256 TEXT,
+                    metadata TEXT NOT NULL DEFAULT '{}',
                     created_at TEXT NOT NULL,
                     FOREIGN KEY(conversation_id) REFERENCES conversations(id),
                     FOREIGN KEY(message_id) REFERENCES messages(id)
                 )
                 """
             )
+            columns = {
+                row[1]
+                for row in self._conn.execute("PRAGMA table_info(artifacts)").fetchall()
+            }
+            if "metadata" not in columns:
+                self._conn.execute("ALTER TABLE artifacts ADD COLUMN metadata TEXT NOT NULL DEFAULT '{}'")
 
     def create_conversation(
         self,
@@ -195,6 +202,7 @@ class Store:
         name: str,
         size: int,
         sha256: str | None = None,
+        metadata: dict[str, Any] | None = None,
         conversation_id: str | None = None,
         message_id: str | None = None,
         artifact_id: str | None = None,
@@ -205,10 +213,21 @@ class Store:
             self._conn.execute(
                 """
                 INSERT INTO artifacts
-                    (id, conversation_id, message_id, path, kind, name, size, sha256, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    (id, conversation_id, message_id, path, kind, name, size, sha256, metadata, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (aid, conversation_id, message_id, path, kind, name, size, sha256, now),
+                (
+                    aid,
+                    conversation_id,
+                    message_id,
+                    path,
+                    kind,
+                    name,
+                    size,
+                    sha256,
+                    json.dumps(metadata or {}, ensure_ascii=False, default=str),
+                    now,
+                ),
             )
         return self.get_artifact(aid)
 
@@ -238,4 +257,12 @@ class Store:
         return data
 
     def _artifact_row(self, row: sqlite3.Row) -> dict[str, Any]:
-        return dict(row)
+        data = dict(row)
+        try:
+            metadata = json.loads(data.pop("metadata", "{}") or "{}")
+        except ValueError:
+            metadata = {}
+        data["metadata"] = metadata
+        if isinstance(metadata, dict):
+            data.update({key: value for key, value in metadata.items() if key not in data})
+        return data

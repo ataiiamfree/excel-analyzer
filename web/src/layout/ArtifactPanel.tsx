@@ -104,7 +104,7 @@ export default function ArtifactPanel({ artifacts }: ArtifactPanelProps) {
 }
 
 function isPreviewArtifact(artifact: Artifact) {
-  return ["chart", "excel", "csv", "data"].includes(artifact.kind);
+  return ["chart", "excel", "csv", "data", "normalized_table"].includes(artifact.kind);
 }
 
 function isCodeArtifact(artifact: Artifact) {

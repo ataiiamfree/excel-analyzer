@@ -37,7 +37,7 @@ def sha256_file(path: str | Path) -> str:
 
 
 def artifact_urls(artifact_id: str, kind: str) -> dict[str, str | None]:
-    table_like = kind in {"excel", "csv", "data"}
+    table_like = kind in {"excel", "csv", "data", "normalized_table"}
     return {
         "url": f"/api/artifacts/{artifact_id}",
         "preview_url": f"/api/artifacts/{artifact_id}/preview" if table_like else None,
@@ -54,3 +54,24 @@ def resolve_artifact_path(artifact: dict, workspace_root: str | Path) -> Path:
         workspace = Workspace(root=workspace_root, task_id=conversation_id)
         return Path(workspace.path) / raw_path
     return raw_path
+
+
+def artifact_metadata_from_manifest(item: dict | None) -> dict:
+    if not item:
+        return {}
+    keys = {
+        "artifact_id",
+        "description",
+        "producer_step_id",
+        "producer_step",
+        "producer_tool",
+        "inputs",
+        "input_artifact_ids",
+        "source_tables",
+        "script_path",
+        "stdout_summary",
+        "schema",
+        "row_count",
+        "chart_metadata",
+    }
+    return {key: item.get(key) for key in keys if key in item and item.get(key) is not None}
