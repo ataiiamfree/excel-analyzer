@@ -2,10 +2,9 @@ import asyncio
 import json
 from types import SimpleNamespace
 
-from app.agent.orchestrator import TaskResult
+import pytest
+
 from app.agent.runtime import (
-    FallbackAgentRuntimeAdapter,
-    OrchestratorRuntimeAdapter,
     PiRpcTransport,
     PiRuntimeError,
     PiSidecarRuntimeAdapter,
@@ -13,11 +12,6 @@ from app.agent.runtime import (
     build_agent_runtime,
 )
 from app.config import Config
-
-
-class FakeOrchestrator:
-    async def run(self, **kwargs):
-        return TaskResult(report=f"fallback:{kwargs['query']}", files=[])
 
 
 class FakeTransport:
@@ -81,15 +75,6 @@ class FakeProcess:
         return 0
 
 
-def test_orchestrator_runtime_adapter_delegates_run():
-    adapter = OrchestratorRuntimeAdapter(FakeOrchestrator())
-    request = RuntimeRequest(query="分析", session=SimpleNamespace())
-
-    result = asyncio.run(adapter.run(request))
-
-    assert result.report == "fallback:分析"
-
-
 def test_pi_sidecar_maps_events_to_callbacks(tmp_path):
     events = [
         {"type": "agent_start"},
@@ -125,7 +110,7 @@ def test_pi_sidecar_maps_events_to_callbacks(tmp_path):
     async def on_reasoning_token(token):
         callbacks["reasoning"].append(token)
 
-    config = Config(workspace_dir=str(tmp_path), agent_runtime="pi")
+    config = Config(workspace_dir=str(tmp_path))
     adapter = PiSidecarRuntimeAdapter(
         config=config,
         transport=FakeTransport(events=events, result={"files": ["output/a.csv"]}),
@@ -182,7 +167,7 @@ def test_pi_sidecar_keeps_prefinal_text_out_of_report(tmp_path):
         reasoning.append(token)
 
     adapter = PiSidecarRuntimeAdapter(
-        config=Config(workspace_dir=str(tmp_path), agent_runtime="pi"),
+        config=Config(workspace_dir=str(tmp_path)),
         transport=FakeTransport(events=events),
     )
     session = SimpleNamespace(session_id="s1", file_path="/tmp/a.xlsx", tasks=[])
@@ -206,51 +191,34 @@ def test_pi_sidecar_keeps_prefinal_text_out_of_report(tmp_path):
     assert "我先分析执行计划" not in result.report
 
 
-def test_build_agent_runtime_defaults_to_pi_with_fallback(tmp_path):
+def test_build_agent_runtime_returns_pi_sidecar(tmp_path):
     config = Config(workspace_dir=str(tmp_path))
 
     runtime = build_agent_runtime(
         config,
-        FakeOrchestrator(),
-        pi_transport=FakeTransport(exc=PiRuntimeError("boom")),
+        pi_transport=FakeTransport(),
     )
 
-    assert isinstance(runtime, FallbackAgentRuntimeAdapter)
-    assert runtime.primary.name == "pi-sidecar"
+    assert isinstance(runtime, PiSidecarRuntimeAdapter)
+    assert runtime.name == "pi-sidecar"
 
 
-def test_fallback_runtime_uses_orchestrator_when_pi_fails(tmp_path):
+def test_build_agent_runtime_does_not_fallback_when_pi_fails(tmp_path):
     config = Config(workspace_dir=str(tmp_path))
     runtime = build_agent_runtime(
         config,
-        FakeOrchestrator(),
         pi_transport=FakeTransport(exc=PiRuntimeError("boom")),
     )
-    reasoning = []
 
-    async def on_reasoning_token(token):
-        reasoning.append(token)
-
-    result = asyncio.run(
-        runtime.run(
-            RuntimeRequest(
-                query="继续分析",
-                session=SimpleNamespace(session_id="s1", file_path="/tmp/a.xlsx", tasks=[]),
-                callbacks={"on_reasoning_token": on_reasoning_token},
+    with pytest.raises(PiRuntimeError, match="boom"):
+        asyncio.run(
+            runtime.run(
+                RuntimeRequest(
+                    query="继续分析",
+                    session=SimpleNamespace(session_id="s1", file_path="/tmp/a.xlsx", tasks=[]),
+                )
             )
         )
-    )
-
-    assert result.report == "fallback:继续分析"
-    assert "Runtime fallback" in "".join(reasoning)
-
-
-def test_runtime_factory_can_force_orchestrator(tmp_path):
-    config = Config(workspace_dir=str(tmp_path), agent_runtime="orchestrator")
-
-    runtime = build_agent_runtime(config, FakeOrchestrator())
-
-    assert isinstance(runtime, OrchestratorRuntimeAdapter)
 
 
 def test_pi_rpc_transport_sends_prompt_and_reads_agent_events():

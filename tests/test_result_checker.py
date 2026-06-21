@@ -1,7 +1,7 @@
 from pathlib import Path
 from types import SimpleNamespace
 
-from app.agent.orchestrator import StepResult
+from app.agent.types import StepResult
 from app.tools.result_checker import ResultChecker
 
 

@@ -446,11 +446,11 @@ Artifact Graph 需要回答：
 | Intent Router | 基于用户 query、当前 artifact manifest 和文件上下文选择 `spreadsheet_analysis`、`artifact_qa` 或 `report_generation` |
 | Artifact Graph v1 | `Workspace.register_artifact()` 扩展 metadata，API persistence 增加 `metadata` JSON 字段 |
 | Artifact QA | `app/agent/artifact_qa.py`，按文件名/血缘/脚本提示解释已生成产物 |
-| Agent Runtime v1 | `app/agent/runtime.py`，默认以 Pi RPC sidecar 为主 runtime，Orchestrator 作为 fallback |
+| Agent Runtime v1 | `app/agent/runtime.py`，固定以 Pi RPC sidecar 为主 runtime，无 Orchestrator fallback |
 | Python Tool Service | `app/agent/pi_tool_service.py`，把 spreadsheet、sandbox、artifact、validation 工具以命令行桥暴露给 Pi |
 | Artifact Panel | 前端 artifact 类型和列表展示支持 producer/source metadata、normalized table 预览 |
 
-当前实现仍把 Python sandbox、Excel 预处理、结果校验和 Artifact Graph 留在 Python 后端。Pi 负责主 agent loop、tool selection 和自然语言输出；工具执行必须通过 `python -m app.agent.pi_tool_service ...` 回到后端边界。默认 `AGENT_RUNTIME=pi`，可通过 `AGENT_RUNTIME=orchestrator` 强制切回旧 Orchestrator；默认 `AGENT_RUNTIME_FALLBACK=true`，Pi 不可用时会自动回退。
+当前实现仍把 Python sandbox、Excel 预处理、结果校验和 Artifact Graph 留在 Python 后端。Pi 负责主 agent loop、tool selection 和自然语言输出；工具执行必须通过 `python -m app.agent.pi_tool_service ...` 回到后端边界。API 层固定使用 Pi sidecar runtime，不再保留旧 Orchestrator runtime 或 fallback 逻辑；Pi 不可用时任务直接失败并返回明确错误。
 
 ## 十一、设计原则
 

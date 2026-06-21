@@ -8,8 +8,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
-from app.agent.orchestrator import StepResult, build_orchestrator
 from app.agent.runtime import RuntimeRequest, build_agent_runtime
+from app.agent.types import StepResult
 from app.agent.next_actions import generate_next_actions
 from app.agent.plan import ExecutionPlan, Step
 from app.api.artifact_utils import artifact_metadata_from_manifest, artifact_urls, infer_artifact_kind, sha256_file
@@ -29,6 +29,7 @@ from app.api.ws_events import (
     StepStartEvent,
 )
 from app.config import Config
+from app.llm.client import build_llm_client
 from app.session import Session
 from app.workspace import Workspace
 
@@ -206,8 +207,7 @@ async def _run_query(
         )
 
     await emitter.emit(RunStartEvent(seq=0, message_id=assistant_message_id))
-    orchestrator = build_orchestrator(config)
-    agent_runtime = build_agent_runtime(config, orchestrator)
+    agent_runtime = build_agent_runtime(config)
 
     async def persist_payload() -> None:
         if persist_messages:
@@ -367,7 +367,7 @@ async def _run_query(
     payload["artifact_ids"] = artifact_ids
     if not task_result.failed:
         payload["next_actions"] = await generate_next_actions(
-            llm_client=orchestrator.llm,
+            llm_client=build_llm_client(config),
             query=query,
             report=payload["report"],
             steps=payload["steps"],

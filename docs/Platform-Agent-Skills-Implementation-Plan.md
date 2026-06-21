@@ -58,10 +58,10 @@ Agent Runtime 替换 Orchestrator 核心循环
 | M3 Artifact QA | 已实现 | `app/agent/artifact_qa.py`、`tests/test_artifact_qa.py` |
 | M4 Skills v1 | 已实现 | `app/skills/registry.py`、`skills/*/SKILL.md` |
 | M5 Pi / Harness Sidecar 试点 | 已实现 | `app/agent/runtime.py`、`app/agent/pi_tool_service.py`、`tests/test_agent_runtime.py` |
-| M6 Agent Runtime 替换核心循环 | 已实现 v1 | `app/api/ws/runner.py` 默认通过 Pi primary runtime 调用 agent，Orchestrator 作为 fallback |
+| M6 Agent Runtime 替换核心循环 | 已实现 v1 | `app/api/ws/runner.py` 固定通过 Pi sidecar runtime 调用 agent，无 Orchestrator fallback |
 | M7 办公场景扩展 | 未实现 | 后续再扩展非 Excel 数据源和更多输出形态 |
 
-当前默认 `AGENT_RUNTIME=pi`，系统会优先启动 `pi --mode rpc --no-session`。如果本机未安装 Pi、模型凭证不可用或 sidecar 运行失败，默认 `AGENT_RUNTIME_FALLBACK=true` 会回退到当前 Python Orchestrator。部署 Pi primary runtime 需要本机安装 `@earendil-works/pi-coding-agent` 或提供兼容的 `PI_COMMAND`。
+当前系统固定启动 `pi --mode rpc --no-session` 作为主 agent runtime。本机需要安装 `@earendil-works/pi-coding-agent` 或提供兼容的 `PI_COMMAND`；如果 Pi CLI、模型凭证或 sidecar 运行失败，任务会直接失败并返回明确错误，不再回退到旧 Python Orchestrator。
 
 ## 四、Milestone 1：工具协议与注册表
 
@@ -212,9 +212,9 @@ FastAPI
   - `message_update.thinking_delta` 和 `tool_execution_*` → `reasoning.delta`
   - `agent_start/agent_end` → synthetic `pi-runtime` step start/end
 - 增加 runtime factory：
-  - `AGENT_RUNTIME=pi`：Pi 为主 runtime。
-  - `AGENT_RUNTIME=orchestrator`：强制走旧 Orchestrator。
-  - `AGENT_RUNTIME_FALLBACK=true`：Pi 失败时自动回退。
+  - 固定返回 `PiSidecarRuntimeAdapter`。
+  - 保留 `PI_COMMAND`、`PI_ARGS`、`PI_CWD`、`PI_PROVIDER` 和 `PI_MODEL` 作为 Pi sidecar 配置。
+  - 不再提供 `AGENT_RUNTIME` 或 `AGENT_RUNTIME_FALLBACK`；Pi 失败时由 API 返回失败事件。
 - 选择少量场景跑 A/B：
   - 普通表格统计。
   - 复杂多步分析。

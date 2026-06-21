@@ -7,8 +7,8 @@ from pathlib import Path
 
 import pandas as pd
 
-from app.agent.orchestrator import StepResult
 from app.agent.plan import Step
+from app.agent.types import StepResult
 
 
 TABLE_PREVIEW_ROWS = 50

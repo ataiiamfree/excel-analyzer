@@ -255,3 +255,16 @@ class LLMClient:
         if self._client and not self._client.is_closed:
             await self._client.aclose()
             self._client = None
+
+
+def build_llm_client(config: object) -> LLMClient:
+    """Create the configured OpenAI-compatible client."""
+
+    return LLMClient(
+        base_url=str(getattr(config, "llm_base_url")),
+        model=str(getattr(config, "llm_model")),
+        api_key=str(getattr(config, "llm_api_key", "")),
+        thinking=bool(getattr(config, "llm_thinking", False)),
+        effort=str(getattr(config, "llm_reasoning_effort", "")),
+        timeout=float(getattr(config, "llm_timeout_seconds", 180)),
+    )

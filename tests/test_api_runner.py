@@ -7,16 +7,15 @@ from app.api.ws import runner
 from app.config import Config
 
 
-class FakeOrchestrator:
-    llm = None
-
-    async def run(self, **kwargs):
-        await kwargs["on_report_token"]("报告")
+class FakeRuntime:
+    async def run(self, request):
+        await request.callbacks["on_report_token"]("报告")
         return SimpleNamespace(failed=False, report="报告", files=[])
 
 
 def test_run_conversation_persists_client_message_id(tmp_path, monkeypatch):
-    monkeypatch.setattr(runner, "build_orchestrator", lambda config: FakeOrchestrator())
+    monkeypatch.setattr(runner, "build_agent_runtime", lambda config: FakeRuntime())
+    monkeypatch.setattr(runner, "build_llm_client", lambda config: None)
     store = Store(tmp_path / "chat.sqlite3")
     source = tmp_path / "source.xlsx"
     source.write_bytes(b"xlsx")
@@ -30,7 +29,6 @@ def test_run_conversation_persists_client_message_id(tmp_path, monkeypatch):
     config = Config(
         workspace_dir=str(tmp_path / "workspace"),
         api_db_path=str(tmp_path / "chat.sqlite3"),
-        agent_runtime="orchestrator",
     )
 
     asyncio.run(

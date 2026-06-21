@@ -1,7 +1,7 @@
 import openpyxl
 
-from app.agent.orchestrator import StepResult
 from app.agent.plan import Step
+from app.agent.types import StepResult
 from app.main import (
     _format_plan_for_ui,
     _format_step_result_for_ui,

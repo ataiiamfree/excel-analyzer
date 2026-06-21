@@ -1,9 +1,9 @@
-"""Agent runtime adapters.
+"""Python-side agent runtime for the Pi sidecar.
 
-The API layer talks to this module instead of depending directly on a specific
-orchestrator implementation. Pi is the primary runtime in this branch: the
-Python orchestrator remains available as the compatibility fallback and as the
-provider of trusted spreadsheet tools.
+The API layer talks to this module instead of depending on the legacy
+plan-execute orchestrator. Pi owns the agent loop; Python keeps the trusted
+runtime boundary for typed tool execution, artifact manifests, and event
+mapping.
 """
 
 from __future__ import annotations
@@ -16,8 +16,8 @@ import os
 import shlex
 from typing import Any
 
-from app.agent.orchestrator import StepResult, TaskResult
 from app.agent.plan import ExecutionPlan, Step
+from app.agent.types import StepResult, TaskResult
 from app.skills.registry import IntentRouter, SkillRegistry, build_default_skill_registry
 from app.tools.registry import ToolRegistry, build_default_tool_registry
 from app.workspace import Workspace
@@ -45,41 +45,6 @@ class AgentRuntimeAdapter:
 
     async def run(self, request: RuntimeRequest) -> Any:  # pragma: no cover - interface
         raise NotImplementedError
-
-
-class OrchestratorRuntimeAdapter(AgentRuntimeAdapter):
-    name = "orchestrator"
-
-    def __init__(self, orchestrator: Any):
-        self.orchestrator = orchestrator
-
-    async def run(self, request: RuntimeRequest) -> Any:
-        return await self.orchestrator.run(
-            query=request.query,
-            session=request.session,
-            **request.callbacks,
-        )
-
-
-class FallbackAgentRuntimeAdapter(AgentRuntimeAdapter):
-    """Run a primary runtime and fall back to the legacy orchestrator on failure."""
-
-    name = "fallback"
-
-    def __init__(self, primary: AgentRuntimeAdapter, fallback: AgentRuntimeAdapter):
-        self.primary = primary
-        self.fallback = fallback
-
-    async def run(self, request: RuntimeRequest) -> Any:
-        try:
-            return await self.primary.run(request)
-        except Exception as exc:
-            callback = request.callbacks.get("on_reasoning_token")
-            if callback is not None:
-                await callback(
-                    f"\n[Runtime fallback] {self.primary.name} failed: {type(exc).__name__}: {exc}\n"
-                )
-            return await self.fallback.run(request)
 
 
 class PiRpcTransport:
@@ -425,31 +390,15 @@ class PiSidecarRuntimeAdapter(AgentRuntimeAdapter):
 
 def build_agent_runtime(
     config: Any,
-    orchestrator: Any,
     *,
     pi_transport: Any | None = None,
 ) -> AgentRuntimeAdapter:
-    """Build the configured runtime.
+    """Build the single supported Python-side runtime."""
 
-    AGENT_RUNTIME=pi makes Pi primary. AGENT_RUNTIME=orchestrator keeps the
-    legacy Python orchestrator as the only runtime. When fallback is enabled,
-    Pi startup/runtime failures fall back to the orchestrator.
-    """
-
-    fallback = OrchestratorRuntimeAdapter(orchestrator)
-    mode = str(getattr(config, "agent_runtime", "pi")).lower().replace("_", "-")
-    if mode in {"orchestrator", "legacy"}:
-        return fallback
-    if mode not in {"pi", "pi-sidecar", "auto"}:
-        raise ValueError(f"Unsupported AGENT_RUNTIME: {mode}")
-
-    primary = PiSidecarRuntimeAdapter(
+    return PiSidecarRuntimeAdapter(
         config=config,
         transport=pi_transport or build_pi_rpc_transport(config),
     )
-    if getattr(config, "agent_runtime_fallback", True):
-        return FallbackAgentRuntimeAdapter(primary=primary, fallback=fallback)
-    return primary
 
 
 def build_pi_rpc_transport(config: Any) -> PiRpcTransport:
