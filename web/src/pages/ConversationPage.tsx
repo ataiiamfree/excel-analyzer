@@ -139,6 +139,16 @@ export default function ConversationPage() {
   const handleThreadBottomChange = useCallback((atBottom: boolean) => {
     setThreadAtBottom(atBottom);
   }, []);
+  const actionsDisabled = stream.status !== "open" || stream.livePayload?.status === "running";
+  const handleRegenerate = useCallback(
+    (query: string) => {
+      if (actionsDisabled) {
+        return;
+      }
+      stream.sendMessage(query);
+    },
+    [actionsDisabled, stream.sendMessage]
+  );
 
   return (
     <AppShell conversation={conversation.data} groups={conversations.data?.groups ?? []} artifacts={allArtifacts}>
@@ -146,10 +156,12 @@ export default function ConversationPage() {
         messages={displayedMessages}
         livePayload={livePayload}
         artifacts={allArtifacts}
+        actionsDisabled={actionsDisabled}
         onAtBottomChange={handleThreadBottomChange}
+        onRegenerate={handleRegenerate}
       />
       <Composer
-        disabled={stream.status !== "open" || stream.livePayload?.status === "running"}
+        disabled={actionsDisabled}
         nextActions={nextActions}
         onSend={stream.sendMessage}
       />

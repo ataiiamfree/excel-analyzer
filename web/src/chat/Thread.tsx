@@ -8,10 +8,19 @@ interface ThreadProps {
   messages: Message[];
   livePayload: AssistantMessagePayload | null;
   artifacts: Artifact[];
+  actionsDisabled?: boolean;
   onAtBottomChange?: (atBottom: boolean) => void;
+  onRegenerate?: (query: string) => void;
 }
 
-export default function Thread({ messages, livePayload, artifacts, onAtBottomChange }: ThreadProps) {
+export default function Thread({
+  messages,
+  livePayload,
+  artifacts,
+  actionsDisabled,
+  onAtBottomChange,
+  onRegenerate
+}: ThreadProps) {
   const threadRef = useRef<HTMLDivElement | null>(null);
   const atBottomRef = useRef(true);
 
@@ -64,11 +73,13 @@ export default function Thread({ messages, livePayload, artifacts, onAtBottomCha
               payload={message.payload as AssistantMessagePayload}
               artifacts={artifacts}
               createdAt={message.created_at}
+              actionsDisabled={actionsDisabled}
+              onRegenerate={onRegenerate}
             />
           )
         )}
         {livePayload && livePayload.status === "running" ? (
-          <MessageAssistant payload={livePayload} artifacts={artifacts} live />
+          <MessageAssistant payload={livePayload} artifacts={artifacts} live actionsDisabled />
         ) : null}
       </div>
     </div>
