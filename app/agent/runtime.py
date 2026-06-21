@@ -193,13 +193,17 @@ class PiRpcTransport:
 class PiEventMapper:
     """Map Pi SDK/RPC events into the API runner callback shape."""
 
+    final_marker = "<<FINAL_REPORT>>"
+
     def __init__(self, callbacks: dict[str, Any], step: Step):
         self.callbacks = callbacks
         self.step = step
         self.started = False
         self.report_parts: list[str] = []
+        self.raw_text_parts: list[str] = []
         self.reasoning_parts: list[str] = []
         self.tool_events: list[str] = []
+        self.report_started = False
 
     @property
     def report(self) -> str:
@@ -239,9 +243,9 @@ class PiEventMapper:
         if event_type == "agent_end":
             await self.ensure_started()
             if not self.report_parts:
-                text = _last_assistant_text(event.get("messages") or [])
+                text = _last_assistant_text(event.get("messages") or []) or "".join(self.raw_text_parts)
                 if text:
-                    self.report_parts.append(text)
+                    await self._emit_report(_extract_final_report(text, self.final_marker))
 
     async def ensure_started(self) -> None:
         if self.started:
@@ -275,8 +279,20 @@ class PiEventMapper:
         if update_type == "text_delta":
             delta = str(update.get("delta") or "")
             if delta:
-                self.report_parts.append(delta)
-                callback = self.callbacks.get("on_report_token")
+                self.raw_text_parts.append(delta)
+                raw_text = "".join(self.raw_text_parts)
+                if self.report_started:
+                    await self._emit_report(delta)
+                    return
+                marker_index = raw_text.find(self.final_marker)
+                if marker_index >= 0:
+                    self.report_started = True
+                    final_text = raw_text[marker_index + len(self.final_marker):]
+                    if final_text:
+                        await self._emit_report(final_text)
+                    return
+                self.reasoning_parts.append(delta)
+                callback = self.callbacks.get("on_reasoning_token")
                 if callback is not None:
                     await callback(delta)
         elif update_type == "thinking_delta":
@@ -286,6 +302,14 @@ class PiEventMapper:
                 callback = self.callbacks.get("on_reasoning_token")
                 if callback is not None:
                     await callback(delta)
+
+    async def _emit_report(self, text: str) -> None:
+        if not text:
+            return
+        self.report_parts.append(text)
+        callback = self.callbacks.get("on_report_token")
+        if callback is not None:
+            await callback(text)
 
     async def _tool_line(self, prefix: str, data: Any) -> None:
         text = prefix
@@ -380,6 +404,10 @@ class PiSidecarRuntimeAdapter(AgentRuntimeAdapter):
             "2. 用户可见产物必须写入当前 workspace 的 output/，并由工具服务登记 Artifact Graph。\n"
             "3. 不要泄露 API key、环境变量或 workspace 外路径。\n"
             "4. 如果用户询问已生成产物，优先调用 artifact.explain 或 artifact.inspect，不重新分析原始文件。\n\n"
+            "输出约束：\n"
+            f"- 只有准备给用户最终报告时，才输出 `{PiEventMapper.final_marker}`，后面紧跟最终报告正文。\n"
+            "- marker 之前不要输出任何给用户看的执行过程。\n"
+            "- 最终报告中禁止描述工具调用、参数调整、路径排查、沙箱重试等过程性文字。\n\n"
             f"当前 session: {payload.get('session_id')}\n"
             f"当前 workspace: {payload.get('workspace_path')}\n"
             f"当前文件: {payload.get('file_path') or '无'}\n"
@@ -471,3 +499,27 @@ def _last_assistant_text(messages: list[dict[str, Any]]) -> str:
             ]
             return "".join(parts).strip()
     return ""
+
+
+def _extract_final_report(text: str, marker: str) -> str:
+    if not text:
+        return ""
+    marker_index = text.find(marker)
+    if marker_index >= 0:
+        return text[marker_index + len(marker):].strip()
+
+    candidates = (
+        "## 📊 分析结果",
+        "## 分析结果",
+        "# 分析结果",
+        "分析结果：",
+        "分析结果:",
+        "最终答案：",
+        "最终答案:",
+        "结论如下：",
+        "结论如下:",
+    )
+    indexes = [text.find(candidate) for candidate in candidates if text.find(candidate) >= 0]
+    if indexes:
+        return text[min(indexes):].strip()
+    return text.strip()

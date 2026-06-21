@@ -1880,6 +1880,7 @@ class UserMemory:
 - `skills/*/SKILL.md` 保存可演进的流程约束。Skill 约束会进入 planning prompt，用来约束工具选择、数据口径、产物登记和结果校验。
 - `app/agent/artifact_qa.py` 提供产物问答能力。它从 artifact manifest 中按文件名或关键词匹配产物，读取 producer step、source tables、script path、stdout summary 和图表元信息，解释图表/导出表/报告的含义。
 - `app/agent/runtime.py` 提供 `AgentRuntimeAdapter`、`PiSidecarRuntimeAdapter`、`PiRpcTransport`、`FallbackAgentRuntimeAdapter` 和 `OrchestratorRuntimeAdapter`。默认 `AGENT_RUNTIME=pi`，API 层优先通过 Pi RPC sidecar 调用 agent；`AGENT_RUNTIME=orchestrator` 可强制使用旧 Orchestrator，`AGENT_RUNTIME_FALLBACK=true` 会在 Pi 不可用时自动回退。
+- Pi runtime 使用 `<<FINAL_REPORT>>` 作为最终报告 marker。marker 之前的 `message_update.text_delta` 会进入 reasoning，不写入报告；marker 之后的文本才会写入 `report.delta`，避免执行过程污染最终报告。
 - `app/agent/pi_tool_service.py` 是 Pi 调用 Python typed tools 的命令行桥。Pi 负责主 agent loop、规划和最终表达；Excel 解析、sandbox、结果校验和 Artifact Graph 写入仍由 Python 后端工具执行。
 - `Workspace.register_artifact()` 和 API persistence 已扩展 Artifact Graph v1 字段，包括 `artifact_id`、`producer_step_id`、`producer_tool`、`input_artifact_ids`、`source_tables`、`script_path`、`stdout_summary`、`chart_metadata` 和 `sha256`。
 

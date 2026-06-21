@@ -207,7 +207,8 @@ FastAPI
 - 实现 Pi RPC sidecar adapter，使用 `pi --mode rpc --no-session` JSONL 协议。
 - 将 typed tools 通过 `app.agent.pi_tool_service` 命令行桥暴露给 sidecar。
 - 将 sidecar event stream 映射回现有 WebSocket event schema：
-  - `message_update.text_delta` → `report.delta`
+  - `message_update.text_delta` 中 `<<FINAL_REPORT>>` 之后的内容 → `report.delta`
+  - `message_update.text_delta` 中 marker 之前的内容 → `reasoning.delta`
   - `message_update.thinking_delta` 和 `tool_execution_*` → `reasoning.delta`
   - `agent_start/agent_end` → synthetic `pi-runtime` step start/end
 - 增加 runtime factory：

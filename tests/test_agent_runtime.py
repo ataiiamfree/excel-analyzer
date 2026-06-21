@@ -156,6 +156,54 @@ def test_pi_sidecar_maps_events_to_callbacks(tmp_path):
     assert "思考" in "".join(callbacks["reasoning"])
     assert "python -m app.agent.pi_tool_service" in adapter.transport.payload["prompt"]
     assert "spreadsheet.ingest_workbook" in adapter.transport.payload["prompt"]
+    assert "<<FINAL_REPORT>>" in adapter.transport.payload["prompt"]
+
+
+def test_pi_sidecar_keeps_prefinal_text_out_of_report(tmp_path):
+    events = [
+        {"type": "agent_start"},
+        {
+            "type": "message_update",
+            "assistantMessageEvent": {"type": "text_delta", "delta": "我先分析执行计划。"},
+        },
+        {
+            "type": "message_update",
+            "assistantMessageEvent": {"type": "text_delta", "delta": "<<FINAL_REPORT>>总预算 544.20 万元。"},
+        },
+        {"type": "agent_end", "messages": []},
+    ]
+    reports = []
+    reasoning = []
+
+    async def on_report_token(token):
+        reports.append(token)
+
+    async def on_reasoning_token(token):
+        reasoning.append(token)
+
+    adapter = PiSidecarRuntimeAdapter(
+        config=Config(workspace_dir=str(tmp_path), agent_runtime="pi"),
+        transport=FakeTransport(events=events),
+    )
+    session = SimpleNamespace(session_id="s1", file_path="/tmp/a.xlsx", tasks=[])
+
+    result = asyncio.run(
+        adapter.run(
+            RuntimeRequest(
+                query="分析预算",
+                session=session,
+                callbacks={
+                    "on_report_token": on_report_token,
+                    "on_reasoning_token": on_reasoning_token,
+                },
+            )
+        )
+    )
+
+    assert result.report == "总预算 544.20 万元。"
+    assert "".join(reports) == "总预算 544.20 万元。"
+    assert "我先分析执行计划" in "".join(reasoning)
+    assert "我先分析执行计划" not in result.report
 
 
 def test_build_agent_runtime_defaults_to_pi_with_fallback(tmp_path):
