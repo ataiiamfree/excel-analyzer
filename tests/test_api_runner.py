@@ -27,7 +27,11 @@ def test_run_conversation_persists_client_message_id(tmp_path, monkeypatch):
         file_size=source.stat().st_size,
         local_file_path=str(source),
     )
-    config = Config(workspace_dir=str(tmp_path / "workspace"), api_db_path=str(tmp_path / "chat.sqlite3"))
+    config = Config(
+        workspace_dir=str(tmp_path / "workspace"),
+        api_db_path=str(tmp_path / "chat.sqlite3"),
+        agent_runtime="orchestrator",
+    )
 
     asyncio.run(
         runner.run_conversation_query(

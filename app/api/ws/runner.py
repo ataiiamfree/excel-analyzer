@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable
 
 from app.agent.orchestrator import StepResult, build_orchestrator
-from app.agent.runtime import OrchestratorRuntimeAdapter, RuntimeRequest
+from app.agent.runtime import RuntimeRequest, build_agent_runtime
 from app.agent.next_actions import generate_next_actions
 from app.agent.plan import ExecutionPlan, Step
 from app.api.artifact_utils import artifact_metadata_from_manifest, artifact_urls, infer_artifact_kind, sha256_file
@@ -207,7 +207,7 @@ async def _run_query(
 
     await emitter.emit(RunStartEvent(seq=0, message_id=assistant_message_id))
     orchestrator = build_orchestrator(config)
-    agent_runtime = OrchestratorRuntimeAdapter(orchestrator)
+    agent_runtime = build_agent_runtime(config, orchestrator)
 
     async def persist_payload() -> None:
         if persist_messages:

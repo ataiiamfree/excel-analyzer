@@ -41,3 +41,13 @@ class Config:
     max_repair_attempts: int = field(default_factory=lambda: int(os.getenv("MAX_REPAIR_ATTEMPTS", "2")))
     max_file_size_mb: int = field(default_factory=lambda: int(os.getenv("MAX_FILE_SIZE_MB", "100")))
     max_concurrent_tasks: int = field(default_factory=lambda: int(os.getenv("MAX_CONCURRENT_TASKS", "1")))
+
+    agent_runtime: str = field(default_factory=lambda: os.getenv("AGENT_RUNTIME", "pi"))
+    agent_runtime_fallback: bool = field(
+        default_factory=lambda: os.getenv("AGENT_RUNTIME_FALLBACK", "true").lower() in {"1", "true", "yes", "on"}
+    )
+    pi_command: str = field(default_factory=lambda: os.getenv("PI_COMMAND", "pi"))
+    pi_args: str = field(default_factory=lambda: os.getenv("PI_ARGS", "--mode rpc --no-session"))
+    pi_cwd: str = field(default_factory=lambda: os.getenv("PI_CWD", "."))
+    pi_provider: str = field(default_factory=lambda: os.getenv("PI_PROVIDER", ""))
+    pi_model: str = field(default_factory=lambda: os.getenv("PI_MODEL", ""))

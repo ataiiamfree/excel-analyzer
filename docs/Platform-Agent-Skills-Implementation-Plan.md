@@ -57,11 +57,11 @@ Agent Runtime 替换 Orchestrator 核心循环
 | M2 Artifact Graph v1 | 已实现 | `app/workspace.py`、`app/api/persistence/store.py`、`app/api/artifact_utils.py` |
 | M3 Artifact QA | 已实现 | `app/agent/artifact_qa.py`、`tests/test_artifact_qa.py` |
 | M4 Skills v1 | 已实现 | `app/skills/registry.py`、`skills/*/SKILL.md` |
-| M5 Pi / Harness Sidecar 试点 | 已实现 adapter 骨架 | `app/agent/runtime.py`、`tests/test_agent_runtime.py` |
-| M6 Agent Runtime 替换入口 | 已实现 v1 | `app/api/ws/runner.py` 通过 `AgentRuntimeAdapter` 调用后端 agent |
+| M5 Pi / Harness Sidecar 试点 | 已实现 | `app/agent/runtime.py`、`app/agent/pi_tool_service.py`、`tests/test_agent_runtime.py` |
+| M6 Agent Runtime 替换核心循环 | 已实现 v1 | `app/api/ws/runner.py` 默认通过 Pi primary runtime 调用 agent，Orchestrator 作为 fallback |
 | M7 办公场景扩展 | 未实现 | 后续再扩展非 Excel 数据源和更多输出形态 |
 
-M6 当前不是完整 Pi 替换，而是先把 API 层与具体 Orchestrator 解耦，形成可回退的 runtime 接口。通用 planning/tool loop 的进一步迁移应在 sidecar 真实接入和评测稳定后继续推进。
+当前默认 `AGENT_RUNTIME=pi`，系统会优先启动 `pi --mode rpc --no-session`。如果本机未安装 Pi、模型凭证不可用或 sidecar 运行失败，默认 `AGENT_RUNTIME_FALLBACK=true` 会回退到当前 Python Orchestrator。部署 Pi primary runtime 需要本机安装 `@earendil-works/pi-coding-agent` 或提供兼容的 `PI_COMMAND`。
 
 ## 四、Milestone 1：工具协议与注册表
 
@@ -204,9 +204,16 @@ FastAPI
 
 - 新增 `AgentRuntimeAdapter` 接口。
 - 实现当前 Orchestrator adapter。
-- 实现 Pi sidecar adapter 实验版本。
-- 将 typed tools 暴露给 sidecar。
-- 将 sidecar event stream 映射回现有 WebSocket event schema。
+- 实现 Pi RPC sidecar adapter，使用 `pi --mode rpc --no-session` JSONL 协议。
+- 将 typed tools 通过 `app.agent.pi_tool_service` 命令行桥暴露给 sidecar。
+- 将 sidecar event stream 映射回现有 WebSocket event schema：
+  - `message_update.text_delta` → `report.delta`
+  - `message_update.thinking_delta` 和 `tool_execution_*` → `reasoning.delta`
+  - `agent_start/agent_end` → synthetic `pi-runtime` step start/end
+- 增加 runtime factory：
+  - `AGENT_RUNTIME=pi`：Pi 为主 runtime。
+  - `AGENT_RUNTIME=orchestrator`：强制走旧 Orchestrator。
+  - `AGENT_RUNTIME_FALLBACK=true`：Pi 失败时自动回退。
 - 选择少量场景跑 A/B：
   - 普通表格统计。
   - 复杂多步分析。
@@ -215,8 +222,8 @@ FastAPI
 
 ### 验收标准
 
-- Pi sidecar 能完成至少一个 spreadsheet analysis case。
-- Pi sidecar 能完成 artifact_qa case。
+- Pi sidecar 能通过 tool service 调用 spreadsheet ingest / normalize / profile / sandbox 工具，具备完成 spreadsheet analysis case 的运行路径。
+- Pi sidecar 能通过 `artifact.explain` 完成 artifact_qa case。
 - 现有 FastAPI / React UI 不需要大改即可展示事件。
 - 出现失败时能回退当前 Orchestrator adapter。
 
@@ -228,11 +235,11 @@ FastAPI
 
 ### 主要工作
 
-- 将 planning、tool selection、repair、follow-up routing 迁移到 Agent Runtime。
+- 将 planning、tool selection、repair、follow-up routing 迁移到 Pi Agent Runtime。
 - 保留 Python typed tools、sandbox、workspace 和 artifact graph。
 - 将 ResultChecker 升级为强制工具。
 - 将 reporter 从 Orchestrator 内部组件变为 report skill/tool。
-- 统一 run event log。
+- 统一 run event log：Pi 事件被折回现有 WebSocket event schema，并继续进入消息 payload。
 
 ### 验收标准
 
