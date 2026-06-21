@@ -32,6 +32,7 @@ Thumbs.db
 workspace/
 .files/
 eval_runs/
+eval_datasets/
 
 # pytest
 .pytest_cache/

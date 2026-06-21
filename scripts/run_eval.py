@@ -34,6 +34,8 @@ if str(PROJECT_ROOT) not in sys.path:
 
 LOGGER = logging.getLogger("eval")
 
+from scripts.workbook_compare import compare_workbooks
+
 
 @dataclass(frozen=True)
 class EvalCase:
@@ -308,6 +310,10 @@ def run_assertions(case: EvalCase, snapshot: ExecutionSnapshot) -> list[Assertio
     required_columns = assertions.get("required_columns", {})
     if required_sheet_names or required_columns:
         outcomes.extend(_workbook_assertions(snapshot.output_files, required_sheet_names, required_columns))
+
+    answer_workbook = assertions.get("answer_workbook", assertions.get("golden_workbook"))
+    if answer_workbook:
+        outcomes.extend(_answer_workbook_assertions(answer_workbook, snapshot.output_files, Path(case.source).parent))
 
     forbidden_patterns = [str(value) for value in assertions.get("forbidden_script_patterns", [])]
     for pattern in forbidden_patterns:
@@ -1035,6 +1041,131 @@ def _workbook_assertions(
     return outcomes
 
 
+def _answer_workbook_assertions(raw: Any, output_files: list[Path], base_dir: Path) -> list[AssertionOutcome]:
+    specs = raw if isinstance(raw, list) else [raw]
+    outcomes: list[AssertionOutcome] = []
+    candidates = _candidate_answer_workbooks(output_files)
+
+    for index, item in enumerate(specs, start=1):
+        if isinstance(item, str):
+            spec = {"path": item}
+        elif isinstance(item, dict):
+            spec = dict(item)
+        else:
+            outcomes.append(AssertionOutcome(
+                name=f"answer_workbook:{index}",
+                passed=False,
+                detail=f"Unsupported answer_workbook spec: {item!r}",
+            ))
+            continue
+
+        required = bool(spec.get("required", True))
+        expected_path = _resolve_expected_workbook_path(base_dir, spec.get("path", spec.get("file")))
+        if expected_path is None or not expected_path.exists():
+            outcomes.append(AssertionOutcome(
+                name=f"answer_workbook:{index}",
+                passed=False,
+                detail=f"Golden workbook not found: {expected_path}",
+                required=required,
+            ))
+            continue
+        if not candidates:
+            outcomes.append(AssertionOutcome(
+                name=f"answer_workbook:{expected_path.name}",
+                passed=False,
+                detail="No generated .xlsx/.xlsm workbook found outside normalized/raw inputs.",
+                required=required,
+            ))
+            continue
+
+        abs_tol = _float_option(spec, ("abs_tol", "tolerance", "tol"), default=1e-6)
+        rel_tol = _float_option(spec, ("rel_tol",), default=0.0)
+        min_match_ratio = _float_option(spec, ("min_match_ratio", "min_ratio"), default=1.0)
+        max_mismatches = _int_option(spec, ("max_mismatches",), default=0)
+
+        comparisons = []
+        errors = []
+        for candidate in candidates:
+            try:
+                comparisons.append(compare_workbooks(
+                    candidate,
+                    expected_path,
+                    ranges=spec.get("ranges", spec.get("range", spec.get("answer_position"))),
+                    default_sheet=spec.get("sheet", spec.get("answer_sheet")),
+                    abs_tol=abs_tol,
+                    rel_tol=rel_tol,
+                    data_only=bool(spec.get("data_only", True)),
+                ))
+            except Exception as exc:
+                errors.append(f"{candidate.name}: {type(exc).__name__}: {exc}")
+
+        if not comparisons:
+            outcomes.append(AssertionOutcome(
+                name=f"answer_workbook:{expected_path.name}",
+                passed=False,
+                detail="; ".join(errors)[:1000] or "No comparable workbook candidates.",
+                required=required,
+            ))
+            continue
+
+        best = max(comparisons, key=lambda result: (result.match_ratio, -result.mismatched_cells))
+        passed = best.passed(min_match_ratio=min_match_ratio, max_mismatches=max_mismatches)
+        detail = best.summary()
+        if errors:
+            detail = f"{detail}; candidate_errors={errors[:3]}"
+        outcomes.append(AssertionOutcome(
+            name=f"answer_workbook:{expected_path.name}",
+            passed=passed,
+            detail=detail[:2000],
+            required=required,
+        ))
+    return outcomes
+
+
+def _candidate_answer_workbooks(output_files: list[Path]) -> list[Path]:
+    candidates: list[Path] = []
+    seen: set[Path] = set()
+    input_suffixes = ("_input.xlsx", "_init.xlsx", "initial.xlsx")
+    for raw_path in output_files:
+        path = Path(raw_path)
+        if path.suffix.lower() not in {".xlsx", ".xlsm"}:
+            continue
+        if not path.exists():
+            continue
+        parts = {part.lower() for part in path.parts}
+        if "normalized" in parts or "raw" in parts:
+            continue
+        if path.name.lower().endswith(input_suffixes):
+            continue
+        resolved = path.resolve()
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        candidates.append(path)
+    return candidates
+
+
+def _resolve_expected_workbook_path(base_dir: Path, raw_path: Any) -> Path | None:
+    if raw_path is None:
+        return None
+    path = Path(str(raw_path))
+    if path.is_absolute():
+        return path
+    return (base_dir / path).resolve()
+
+
+def _int_option(spec: dict[str, Any], names: tuple[str, ...], default: int) -> int:
+    for name in names:
+        value = spec.get(name)
+        if value is None:
+            continue
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            continue
+    return default
+
+
 def _columns_for_sheet(loaded_workbooks: list[tuple[Path, Any]], sheet_name: str) -> set[str]:
     columns: set[str] = set()
     for _, workbook in loaded_workbooks:
@@ -1079,8 +1210,8 @@ async def run_case(case: EvalCase, run_dir: Path, args: argparse.Namespace) -> d
     exception_text: str | None = None
     task_result = None
 
-    async def on_step_start(step: Any) -> None:
-        LOGGER.info("[%s] start step %s: %s", case.id, step.id, step.description)
+    async def on_step_start(step: Any, step_index: int, total_steps: int) -> None:
+        LOGGER.info("[%s] start step %s/%s %s: %s", case.id, step_index, total_steps, step.id, step.description)
 
     async def on_step_end(step: Any, result: Any) -> None:
         LOGGER.info(
@@ -1240,6 +1371,35 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=[],
         help="JSON manifest or Markdown checklist. May be passed multiple times.",
     )
+    parser.add_argument(
+        "--benchmark",
+        action="append",
+        choices=["spreadsheetbench", "spreadsheetbench-v2", "all"],
+        default=[],
+        help=(
+            "Materialize and run a public benchmark. May repeat. "
+            "Defaults: spreadsheetbench=verified, spreadsheetbench-v2=example."
+        ),
+    )
+    parser.add_argument(
+        "--benchmark-variant",
+        help="Benchmark archive variant to use, e.g. verified/example/full.",
+    )
+    parser.add_argument(
+        "--benchmark-data-dir",
+        default=str(PROJECT_ROOT / "eval_datasets"),
+        help="Directory for benchmark archives, extracted files, and generated manifests.",
+    )
+    parser.add_argument(
+        "--benchmark-force",
+        action="store_true",
+        help="Redownload/re-extract benchmark archives before generating manifests.",
+    )
+    parser.add_argument(
+        "--benchmark-no-download",
+        action="store_true",
+        help="Use existing benchmark archives only; fail if they are missing.",
+    )
     parser.add_argument("--case-id", action="append", default=[], help="Run only this case id. May repeat.")
     parser.add_argument("--limit", type=int, help="Run only the first N selected cases.")
     parser.add_argument("--dry-run", action="store_true", help="List cases without calling the agent.")
@@ -1293,7 +1453,19 @@ def _is_transient_error(exception_text: str) -> bool:
 
 
 async def async_main(args: argparse.Namespace) -> int:
-    manifest_paths = [Path(value) for value in args.manifest] or default_manifests()
+    manifest_paths = [Path(value) for value in args.manifest]
+    if args.benchmark:
+        from scripts.benchmark_data import materialize_benchmarks
+
+        manifest_paths.extend(materialize_benchmarks(
+            args.benchmark,
+            output_dir=args.benchmark_data_dir,
+            variant=args.benchmark_variant,
+            force=args.benchmark_force,
+            download=not args.benchmark_no_download,
+        ))
+    if not manifest_paths:
+        manifest_paths = default_manifests()
     all_cases: list[EvalCase] = []
     for manifest in manifest_paths:
         all_cases.extend(load_cases(manifest))

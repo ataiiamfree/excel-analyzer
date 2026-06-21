@@ -18,6 +18,29 @@
 - **交互层**: FastAPI + WebSocket API，React 三栏 Web 界面，支持文件上传、分析、追问、历史回看
 - **会话管理**: Session 追问复用、Memory 跨会话 schema 匹配
 
+## 公开 Benchmark 评测
+
+项目内置了公开 Excel benchmark 的 materializer，可把 Hugging Face 压缩包转换成 `scripts/run_eval.py`
+可直接读取的 manifest，并用标准答案工作簿做端到端回归评分。
+
+```bash
+# 只准备数据和 manifest；默认使用较轻量的 v1 verified / v2 example 变体
+python scripts/prepare_benchmark_data.py --benchmark all
+
+# 查看公开 benchmark 将要跑哪些 case，不调用 LLM
+python scripts/run_eval.py --benchmark spreadsheetbench --dry-run --limit 5
+python scripts/run_eval.py --benchmark spreadsheetbench-v2 --dry-run --limit 5
+
+# 真正端到端跑前 N 个 case
+python scripts/run_eval.py --benchmark spreadsheetbench --limit 3
+
+# 跑完整归档时显式选择 full；会下载并解压较大的官方压缩包
+python scripts/run_eval.py --benchmark spreadsheetbench-v2 --benchmark-variant full --limit 3
+```
+
+生成的数据放在 `eval_datasets/`，评测结果仍写入 `eval_runs/`。公开集 case 会要求 agent 产出 `.xlsx`
+工作簿，并按 benchmark 提供的 `answer_position` 范围与 golden workbook 做单元格值比对。
+
 ## 快速开始
 
 ### 1. 环境准备
