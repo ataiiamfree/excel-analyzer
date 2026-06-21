@@ -1,4 +1,4 @@
-import { ChangeEvent, FormEvent, useState } from "react";
+import { ChangeEvent, FormEvent, KeyboardEvent, useState } from "react";
 import { SendHorizontal, UploadCloud } from "lucide-react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
@@ -28,10 +28,20 @@ export default function HomePage() {
     setFile(event.target.files?.[0] ?? null);
   };
 
-  const submit = (event: FormEvent) => {
-    event.preventDefault();
+  const submitForm = () => {
     if (!file || create.isPending) return;
     create.mutate();
+  };
+
+  const submit = (event: FormEvent) => {
+    event.preventDefault();
+    submitForm();
+  };
+
+  const onQueryKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return;
+    event.preventDefault();
+    submitForm();
   };
 
   return (
@@ -58,6 +68,7 @@ export default function HomePage() {
           <textarea
             value={query}
             onChange={(event) => setQuery(event.target.value)}
+            onKeyDown={onQueryKeyDown}
             placeholder="例如：按区域汇总 Q3 销售额，找出 TOP5 和 BTM5 城市，输出图表与明细表。"
           />
           <div className="upload-actions">

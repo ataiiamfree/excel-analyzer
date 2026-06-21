@@ -314,9 +314,13 @@ table.dt tbody tr:hover { background: var(--accent-soft); }
 .file-row .right a:hover, .file-row .right button:hover { background: rgba(20,15,10,.05); color: var(--ink); }
 .artifact-modal { position: fixed; inset: 0; z-index: 40; display: grid; place-items: center; padding: 28px; background: rgba(22,19,16,.28); }
 .artifact-modal-card { width: min(1040px, 100%); max-height: calc(100vh - 56px); min-height: min(640px, calc(100vh - 56px)); display: flex; flex-direction: column; overflow: hidden; background: var(--bg-elev); border: 1px solid var(--rule-2); border-radius: 14px; box-shadow: var(--shadow-pop); }
+.image-modal-card { width: min(1180px, 100%); min-height: min(720px, calc(100vh - 56px)); background: #fff; }
 .artifact-modal-head { flex: none; display: flex; align-items: center; gap: 12px; justify-content: space-between; padding: 14px 16px; border-bottom: 1px solid var(--rule); }
 .artifact-modal-head .name { font-size: 15px; font-weight: 600; color: var(--ink); }
 .artifact-modal-head .meta { margin-top: 2px; font-family: var(--mono); font-size: 10.5px; color: var(--ink-4); }
+.modal-actions { display: flex; align-items: center; gap: 6px; }
+.image-modal-body { flex: 1; min-height: 0; overflow: auto; display: grid; place-items: center; padding: 18px; background: #fff; }
+.image-modal-body img { display: block; max-width: 100%; max-height: calc(100vh - 154px); height: auto; width: auto; object-fit: contain; border-radius: 6px; }
 .signature { margin-top: 18px; padding-top: 12px; border-top: 1px solid var(--rule); font-family: var(--mono); font-size: 10px; letter-spacing: .12em; text-transform: uppercase; color: var(--ink-4); display: flex; justify-content: space-between; }
 
 .home-shell { min-height: 100vh; min-height: 100dvh; height: 100vh; height: 100dvh; overflow: hidden; background: var(--bg); display: grid; grid-template-columns: 268px minmax(0, 1fr); }
