@@ -220,6 +220,35 @@ def test_simple_response_without_outline():
     assert "采购分析.xlsx" in report
 
 
+def test_simple_response_preserves_final_answer_section():
+    llm = FakeLLM()
+    reporter = Reporter(llm_client=llm)
+    ctx = _make_context(with_outline=False)
+    ctx.final_answers["s1"] = "14400"
+    ctx.step_summaries["s1"] = "统计: debug output\nFinal Answer: 14400"
+    workspace = FakeWorkspace()
+
+    report = asyncio.run(reporter.generate(ctx, workspace))
+
+    assert "## 最终答案" in report
+    assert "Final Answer: 14400" in report
+    assert report.index("## 最终答案") < report.index("## 简要结论")
+
+
+def test_full_report_preserves_final_answer_section():
+    llm = FakeLLM()
+    reporter = Reporter(llm_client=llm)
+    ctx = _make_context(with_outline=True)
+    ctx.final_answers["s1"] = "52.3"
+    workspace = FakeWorkspace()
+
+    report = asyncio.run(reporter.generate(ctx, workspace))
+
+    assert "## 最终答案" in report
+    assert "Final Answer: 52.3" in report
+    assert report.index("## 最终答案") < report.index("## 1. 采购总览")
+
+
 def test_key_findings_in_simple_response():
     llm = FakeLLM()
     reporter = Reporter(llm_client=llm)

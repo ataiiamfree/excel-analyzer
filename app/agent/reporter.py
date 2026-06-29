@@ -174,6 +174,9 @@ class Reporter:
         workspace: Any,
     ) -> str:
         parts: list[str] = [self._build_report_preamble(outline, context)]
+        final_answer_lines = self._final_answer_lines(context)
+        if final_answer_lines:
+            parts.append("## 最终答案\n" + "\n".join(final_answer_lines) + "\n")
 
         # Sections
         for i, (chapter, text) in enumerate(zip(outline, sections)):
@@ -211,6 +214,10 @@ class Reporter:
         """Concise result-first response for non-report tasks."""
         parts = ["# 分析结果"]
 
+        final_answer_lines = self._final_answer_lines(context)
+        if final_answer_lines:
+            parts.append("## 最终答案\n" + "\n".join(final_answer_lines))
+
         summary_lines = self._compact_summary_lines(context)
         if summary_lines:
             parts.append("## 简要结论\n" + "\n".join(f"- {line}" for line in summary_lines))
@@ -223,11 +230,26 @@ class Reporter:
 
         return "\n\n".join(parts)
 
+    def _final_answer_lines(self, context: TaskContext) -> list[str]:
+        answers = getattr(context, "final_answers", {}) or {}
+        if not answers:
+            return []
+        lines = []
+        multiple = len(answers) > 1
+        for step_id, answer in answers.items():
+            answer_text = " ".join(str(answer).strip().split())
+            if not answer_text:
+                continue
+            prefix = f"{step_id}: " if multiple else ""
+            lines.append(f"Final Answer: {prefix}{answer_text}")
+        return lines
+
     def _compact_summary_lines(self, context: TaskContext, max_lines: int = 4) -> list[str]:
         lines: list[str] = []
+        final_answer_lines = set(self._final_answer_lines(context))
         for finding in context.key_findings:
             clean = self._clean_summary_line(str(finding))
-            if clean:
+            if clean and clean not in final_answer_lines:
                 lines.append(clean)
             if len(lines) >= max_lines:
                 return lines
@@ -238,6 +260,8 @@ class Reporter:
             for raw_line in str(summary).splitlines():
                 clean = self._clean_summary_line(raw_line)
                 if not clean:
+                    continue
+                if clean in final_answer_lines:
                     continue
                 lines.append(clean)
                 if len(lines) >= max_lines:

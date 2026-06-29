@@ -308,6 +308,13 @@ class PromptAssembler:
                 "不同 sheet 的同一业务字段可能列名不同，必须做同义/包含匹配，"
                 "例如 送电时间 可匹配 接火送电/送电日期，"
                 "报装容量 可匹配 增减容量/新减增容量(kVA)。"
+                "查询/问答类任务必须在 stdout 最后打印一行 `Final Answer: ...`。"
+                "筛选文本字段时不要只依赖 == 精确匹配；必须按 exact、strip/casefold normalized exact、contains、"
+                "difflib fuzzy candidates 的顺序回退。"
+                "如果 exact 匹配为 0 行，不要直接输出 Not Found/N/A；必须打印候选值、尝试包含或模糊匹配后再决定。"
+                "当用户询问哪些项目、措施、items、list、all、compare 多个对象时，输出全部匹配项，不要只取第一行。"
+                "复杂表中可能有重复表头行或合并单元格展开后的标签行，计算前应过滤明显 header-like 行。"
+                "如果最终答案仍是空、0、N/A 或 Not Found，stdout 中必须同时打印使用的列名、筛选条件和候选值，便于复核。"
                 "把图表和明细写入 output/，用 print 输出摘要和口径。"
             )
         if tool == "artifact_qa":

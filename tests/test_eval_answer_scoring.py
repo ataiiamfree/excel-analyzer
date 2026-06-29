@@ -14,6 +14,15 @@ def test_extract_answer_text_prefers_last_marked_answer():
     assert method == "marked"
 
 
+def test_extract_answer_text_keeps_multiline_marked_answer():
+    report = "Working...\nFinal Answer: first line\nsecond line\nthird line"
+
+    answer, method = extract_answer_text(report)
+
+    assert answer == "first line\nsecond line\nthird line"
+    assert method == "marked"
+
+
 def test_compare_answers_matches_numeric_with_unit_tolerance():
     result = compare_answers("74.434541420118 Yuan/m2", "74.434541420118", mode="auto")
 

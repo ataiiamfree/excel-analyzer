@@ -39,7 +39,7 @@ def test_prompt_budget_raises_cleanly_when_no_degradable_section_fits():
 def test_prompt_budget_compresses_named_summary_section():
     # 设置一个较小的 budget，使得 300 chars 的 summaries 必须被压缩
     BUDGET_PRESETS["small"] = {
-        "max_prompt_tokens": 500,
+        "max_prompt_tokens": 900,
         "step_summaries": 20,
         "max_summary_per_step": 200,
         "max_findings": 3,
@@ -98,7 +98,7 @@ def test_assemble_adapt_includes_key_sections():
 def test_degradable_sections_removed_when_over_budget():
     """当压缩摘要和文件列表都不够时，应逐个移除 degradable 段。"""
     BUDGET_PRESETS["tight"] = {
-        "max_prompt_tokens": 500,
+        "max_prompt_tokens": 900,
         "step_summaries": 10,
         "max_summary_per_step": 10,
         "max_findings": 1,
@@ -167,3 +167,53 @@ def test_compact_profile_keeps_paths_for_all_tables_under_budget():
     assert "不要用 glob" in prompt
     assert "接火送电/送电日期" in prompt
     assert "format='mixed'" in prompt
+
+
+def test_task_context_extracts_final_answer_from_long_stdout():
+    context = TaskContext(
+        task_id="t1",
+        user_query="q",
+        workbook_manifest={},
+        data_profile={},
+    )
+    stdout = "debug line\n" + ("noise\n" * 500) + "Final Answer: 14400\n"
+
+    context.add_step_summary("s1", stdout, "分析")
+
+    assert context.final_answers["s1"] == "14400"
+    assert "Final Answer: 14400" in context.step_summaries["s1"]
+
+
+def test_task_context_extracts_multiline_final_answer():
+    context = TaskContext(
+        task_id="t1",
+        user_query="q",
+        workbook_manifest={},
+        data_profile={},
+    )
+
+    context.add_step_summary(
+        "s1",
+        "debug\nFinal Answer: First measure\nSecond measure\nThird measure",
+        "分析",
+    )
+
+    assert context.final_answers["s1"] == "First measure\nSecond measure\nThird measure"
+
+
+def test_python_prompt_requires_final_answer_and_fuzzy_matching():
+    step = Step(id="s1", tool="python", description="查询", instruction="查询项目")
+    context = TaskContext(
+        task_id="t1",
+        user_query="What is the value?",
+        workbook_manifest={},
+        data_profile={"tables": []},
+        plan=ExecutionPlan([step]),
+    )
+
+    prompt = PromptAssembler().assemble(context, step)
+
+    assert "Final Answer" in prompt
+    assert "difflib fuzzy candidates" in prompt
+    assert "不要直接输出 Not Found/N/A" in prompt
+    assert "输出全部匹配项" in prompt

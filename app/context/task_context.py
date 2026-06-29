@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import OrderedDict
 from dataclasses import dataclass, field
+import re
 from typing import Any
 
 from app.agent.plan import ExecutionPlan
@@ -46,6 +47,7 @@ class TaskContext:
     skill_instructions: str = ""
     step_summaries: OrderedDict[str, str] = field(default_factory=OrderedDict)
     key_findings: list[str] = field(default_factory=list)
+    final_answers: OrderedDict[str, str] = field(default_factory=OrderedDict)
     workspace_files: list[dict[str, Any]] = field(default_factory=list)
     artifact_manifest: list[dict[str, Any]] = field(default_factory=list)
     quality_checks: list[Any] = field(default_factory=list)
@@ -58,6 +60,9 @@ class TaskContext:
     def add_step_summary(self, step_id: str, stdout: str, step_desc: str) -> None:
         summary = self._extract_summary(stdout, self.budget["max_summary_per_step"])
         self.step_summaries[step_id] = f"{step_desc}: {summary}".strip()
+        final_answer = self._extract_final_answer(stdout)
+        if final_answer:
+            self.final_answers[step_id] = final_answer
         findings = self._extract_findings(stdout)
         self.key_findings.extend(findings)
         self.key_findings = self.key_findings[-self.budget["max_findings"] :]
@@ -96,9 +101,16 @@ class TaskContext:
         lines = stdout.splitlines()
         key_lines = []
         current_len = 0
+        final_answer = self._extract_final_answer(stdout)
+        if final_answer:
+            answer_line = f"Final Answer: {final_answer}"
+            key_lines.append(answer_line)
+            current_len += len(answer_line)
         for line in lines:
             stripped = line.strip()
             if not stripped:
+                continue
+            if stripped in key_lines:
                 continue
             if any(char.isdigit() for char in stripped) or any(
                 token in stripped for token in ("=", ":", "：", "平均", "总计", "异常", "发现")
@@ -115,3 +127,15 @@ class TaskContext:
             if any(token in line for token in ("发现", "异常", "平均", "最大", "最小", "总计")):
                 findings.append(line.strip())
         return [item for item in findings if item][:5]
+
+    def _extract_final_answer(self, stdout: str) -> str:
+        text = stdout or ""
+        matches = list(re.finditer(
+            r"(?:final\s+answer|\u6700\u7ec8\u7b54\u6848|\u7b54\u6848)\s*[:\uff1a]\s*",
+            text,
+            flags=re.IGNORECASE,
+        ))
+        if not matches:
+            return ""
+        answer = text[matches[-1].end():].strip()
+        return answer[:2000].rstrip()

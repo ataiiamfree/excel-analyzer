@@ -68,13 +68,13 @@ def extract_answer_text(report: str, *, answer_regex: str | None = None) -> tupl
                 return match.group(1).strip(), "regex"
             return match.group(0).strip(), "regex"
 
-    marked: list[str] = []
-    for line in text.splitlines():
-        match = _FINAL_ANSWER_RE.search(line)
-        if match and match.group(1).strip():
-            marked.append(match.group(1).strip())
-    if marked:
-        return marked[-1], "marked"
+    marker = re.compile(
+        r"(?:final\s+answer|\u6700\u7ec8\u7b54\u6848|\u7b54\u6848)\s*[:\uff1a]\s*",
+        re.IGNORECASE,
+    )
+    matches = list(marker.finditer(text))
+    if matches:
+        return text[matches[-1].end():].strip(), "marked"
     return text.strip(), "full_report"
 
 
