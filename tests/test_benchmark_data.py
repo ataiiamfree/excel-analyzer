@@ -4,6 +4,7 @@ from pathlib import Path
 import openpyxl
 
 from scripts.benchmark_data import (
+    build_sheetbench_manifest,
     build_spreadsheetbench_manifest,
     build_spreadsheetbench_v2_manifest,
 )
@@ -104,3 +105,73 @@ def test_build_spreadsheetbench_v2_manifest_uses_dataset_paths(tmp_path):
     assert case["id"] == "spreadsheetbench-v2-template-02_01"
     assert case["file"].endswith("02_01_input.xlsx")
     assert case["assertions"]["answer_workbook"]["path"].endswith("02_01_golden.xlsx")
+
+
+def test_build_sheetbench_manifest_keeps_qa_and_expected_answer(tmp_path):
+    root = tmp_path / "extracted"
+    suite_dir = root / "sheetbench" / "complex table cases"
+    workbook = root / "sheetbench" / "complex table cases" / "mimo_hitab_xlsx" / "case.xlsx"
+    _save_workbook(workbook)
+    suite_dir.mkdir(parents=True, exist_ok=True)
+    (suite_dir / "complex_tables_mimo_hitab_fixed.json").write_text(
+        json.dumps([
+            {
+                "File": "sheetbench/complex table cases/mimo_hitab_xlsx/case.xlsx",
+                "Tags": ["complex table"],
+                "QA": ["What is the total?", "42"],
+                "Source": "MiMoTable",
+                "ID": "33",
+                "Type": "QA",
+            }
+        ]),
+        encoding="utf-8",
+    )
+    (root / "sheetbench" / "complex table cases" / "complex_tables_realhit_fixed.json").write_text(
+        "[]",
+        encoding="utf-8",
+    )
+
+    manifest_path = tmp_path / "manifest.json"
+    build_sheetbench_manifest(root, manifest_path, variant="complex-qa")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+    assert manifest["case_count"] == 1
+    case = manifest["cases"][0]
+    assert case["id"] == "sheetbench-complex_mimo_hitab-33-1"
+    assert case["file"].endswith("case.xlsx")
+    assert "Final Answer:" in case["question"]
+    assert case["assertions"]["expected_answer"]["value"] == "42"
+    assert case["assertions"]["expected_answer"]["require_marked_answer"] is True
+    assert "tag=complex table" in case["tests"]
+
+
+def test_build_sheetbench_manifest_builds_manipulation_case(tmp_path):
+    root = tmp_path / "extracted"
+    suite_dir = root / "sheetbench" / "manipulation cases"
+    input_wb = suite_dir / "case1" / "input.xlsx"
+    answer_wb = suite_dir / "case1" / "answer.xlsx"
+    _save_workbook(input_wb)
+    _save_workbook(answer_wb)
+    suite_dir.mkdir(parents=True, exist_ok=True)
+    (suite_dir / "manipulation_cases_question.json").write_text(
+        json.dumps([
+            {
+                "File": "sheetbench/manipulation cases/case1/input.xlsx",
+                "Tags": ["large table"],
+                "QA": ["Fill the answer.", "sheetbench/manipulation cases/case1/answer.xlsx"],
+                "Source": "spreadsheetbench",
+                "ID": 1,
+                "Type": "manipulation",
+            }
+        ]),
+        encoding="utf-8",
+    )
+
+    manifest_path = tmp_path / "manifest.json"
+    build_sheetbench_manifest(root, manifest_path, variant="manipulation")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+    assert manifest["case_count"] == 1
+    case = manifest["cases"][0]
+    assert case["assertions"]["answer_workbook"]["path"].endswith("answer.xlsx")
+    assert "type=manipulation" in case["tests"]

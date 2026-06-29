@@ -26,7 +26,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--variant",
-        help="Archive variant. Defaults are benchmark-specific: spreadsheetbench=verified, v2=example.",
+        help="Benchmark variant. Defaults: sheetbench=qa, spreadsheetbench=verified, v2=example.",
     )
     parser.add_argument(
         "--output-dir",

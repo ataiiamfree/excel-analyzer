@@ -34,6 +34,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 LOGGER = logging.getLogger("eval")
 
+from scripts.answer_compare import compare_answers, extract_answer_text
 from scripts.workbook_compare import compare_workbooks
 
 
@@ -62,6 +63,7 @@ class ExecutionSnapshot:
     state: dict[str, Any]
     report: str
     output_files: list[Path] = field(default_factory=list)
+    step_outputs: list[str] = field(default_factory=list)
     scripts: dict[str, str] = field(default_factory=dict)
     exception: str | None = None
 
@@ -299,6 +301,11 @@ def run_assertions(case: EvalCase, snapshot: ExecutionSnapshot) -> list[Assertio
         ))
 
     outcomes.extend(_report_must_mention_assertions(assertions.get("report_must_mention"), snapshot.report))
+    answer_text = "\n\n".join([snapshot.report, *snapshot.step_outputs])
+    outcomes.extend(_expected_answer_assertions(
+        assertions.get("expected_answer", assertions.get("expected_answers")),
+        answer_text,
+    ))
     outcomes.extend(_expected_value_assertions(assertions.get("expected_values"), snapshot.output_files))
     outcomes.extend(_expected_row_count_assertions(assertions.get("expected_row_count"), snapshot.output_files))
     outcomes.extend(_expected_row_assertions(
@@ -414,6 +421,114 @@ def _terms_appear_near(text: str, terms: list[str], window: int) -> bool:
         if all(term in snippet for term in terms):
             return True
     return False
+
+
+def _expected_answer_assertions(raw: Any, report: str) -> list[AssertionOutcome]:
+    specs, errors = _normalize_expected_answer_specs(raw)
+    if not specs and not errors:
+        return []
+
+    outcomes = [
+        AssertionOutcome(name="expected_answer_config", passed=False, detail=error)
+        for error in errors
+    ]
+    for index, spec in enumerate(specs, start=1):
+        outcomes.append(_check_expected_answer(spec, report, index))
+    return outcomes
+
+
+def _normalize_expected_answer_specs(raw: Any) -> tuple[list[dict[str, Any]], list[str]]:
+    if raw is None:
+        return [], []
+    if isinstance(raw, dict):
+        if any(key in raw for key in ("value", "expected", "answer", "expected_any", "options", "answers")):
+            return [dict(raw)], []
+        specs = []
+        for name, value in raw.items():
+            specs.append({"name": str(name), "value": value})
+        return specs, []
+    if isinstance(raw, list):
+        specs: list[dict[str, Any]] = []
+        errors: list[str] = []
+        for index, item in enumerate(raw, start=1):
+            if isinstance(item, dict):
+                specs.append(dict(item))
+            elif isinstance(item, (str, int, float)):
+                specs.append({"name": f"answer_{index}", "value": item})
+            else:
+                errors.append(f"expected_answer[{index}] must be a scalar or object, got {type(item).__name__}")
+        return specs, errors
+    if isinstance(raw, (str, int, float)):
+        return [{"value": raw}], []
+    return [], [f"expected_answer must be a scalar, list, or object, got {type(raw).__name__}"]
+
+
+def _check_expected_answer(spec: dict[str, Any], report: str, index: int) -> AssertionOutcome:
+    name = str(spec.get("name") or spec.get("label") or f"answer_{index}")
+    required = bool(spec.get("required", True))
+    expected_options = _expected_answer_options(spec)
+    if not expected_options:
+        return AssertionOutcome(
+            name=f"expected_answer:{name}",
+            passed=False,
+            detail="No expected answer configured.",
+            required=required,
+        )
+
+    observed, extraction_method = extract_answer_text(report, answer_regex=spec.get("answer_regex"))
+    require_marked = bool(spec.get("require_marked_answer", spec.get("require_final_answer", False)))
+    if require_marked and extraction_method == "full_report":
+        return AssertionOutcome(
+            name=f"expected_answer:{name}",
+            passed=False,
+            detail="No marked final answer found; expected a line like 'Final Answer: ...'.",
+            required=required,
+        )
+
+    mode = str(spec.get("mode") or "auto")
+    abs_tol = _float_option(spec, ("abs_tol", "tolerance", "tol"), default=1e-6)
+    rel_tol = _float_option(spec, ("rel_tol",), default=0.0)
+    min_score = _float_option(spec, ("min_score", "threshold"), default=0.75)
+    min_token_recall = _float_option(spec, ("min_token_recall",), default=0.5)
+
+    comparisons = [
+        compare_answers(
+            expected,
+            observed,
+            mode=mode,
+            abs_tol=abs_tol,
+            rel_tol=rel_tol,
+            min_score=min_score,
+            min_token_recall=min_token_recall,
+        )
+        for expected in expected_options
+    ]
+    best = max(comparisons, key=lambda item: (item.passed, item.score))
+    detail = (
+        f"method={extraction_method}; mode={best.mode}; score={best.score:.4f}; "
+        f"expected={best.expected_text!r}; observed={best.observed_text[:300]!r}; {best.detail}"
+    )
+    return AssertionOutcome(
+        name=f"expected_answer:{name}",
+        passed=best.passed,
+        detail=detail[:2000],
+        required=required,
+    )
+
+
+def _expected_answer_options(spec: dict[str, Any]) -> list[Any]:
+    for key in ("expected_any", "options", "answers"):
+        if key not in spec:
+            continue
+        raw = spec.get(key)
+        if isinstance(raw, (list, tuple, set)):
+            return [value for value in raw if value is not None]
+        if raw is not None:
+            return [raw]
+    for key in ("value", "expected", "answer"):
+        if key in spec and spec.get(key) is not None:
+            return [spec.get(key)]
+    return []
 
 
 def _expected_value_assertions(raw: Any, output_files: list[Path]) -> list[AssertionOutcome]:
@@ -1209,11 +1324,16 @@ async def run_case(case: EvalCase, run_dir: Path, args: argparse.Namespace) -> d
     before_workspaces = _workspace_ids(workspace_root)
     exception_text: str | None = None
     task_result = None
+    step_outputs: list[str] = []
 
     async def on_step_start(step: Any, step_index: int, total_steps: int) -> None:
         LOGGER.info("[%s] start step %s/%s %s: %s", case.id, step_index, total_steps, step.id, step.description)
 
     async def on_step_end(step: Any, result: Any) -> None:
+        stdout = getattr(result, "stdout", "") or ""
+        error = getattr(result, "error", "") or ""
+        if stdout or error:
+            step_outputs.append(f"## {step.id}: {step.description}\n{stdout}\n{error}".strip())
         LOGGER.info(
             "[%s] end step %s: failed=%s files=%d",
             case.id,
@@ -1235,7 +1355,7 @@ async def run_case(case: EvalCase, run_dir: Path, args: argparse.Namespace) -> d
 
     duration = time.perf_counter() - started
     workspace_path = _resolve_workspace_path(workspace_root, session.tasks, before_workspaces)
-    snapshot = _build_snapshot(workspace_path, task_result, exception_text)
+    snapshot = _build_snapshot(workspace_path, task_result, exception_text, step_outputs=step_outputs)
     outcomes = run_assertions(case, snapshot)
     passed = all(outcome.passed for outcome in outcomes if outcome.required)
 
@@ -1247,9 +1367,16 @@ async def run_case(case: EvalCase, run_dir: Path, args: argparse.Namespace) -> d
         "task_ids": list(session.tasks),
         "state": snapshot.state,
         "output_files": [str(path) for path in snapshot.output_files],
+        "step_outputs": [text[:4000] for text in snapshot.step_outputs],
         "assertions": [outcome.to_dict() for outcome in outcomes],
         "exception": exception_text,
     }
+    result["failed_assertions"] = [
+        outcome["name"]
+        for outcome in result["assertions"]
+        if outcome["required"] and not outcome["passed"]
+    ]
+    result["failure_category"] = classify_failure(result)
     _write_json(case_dir / "result.json", result)
     (case_dir / "report.md").write_text(snapshot.report or "", encoding="utf-8")
     return result
@@ -1276,7 +1403,13 @@ def _resolve_workspace_path(
     return max(candidates, key=lambda path: path.stat().st_mtime)
 
 
-def _build_snapshot(workspace_path: Path | None, task_result: Any, exception_text: str | None) -> ExecutionSnapshot:
+def _build_snapshot(
+    workspace_path: Path | None,
+    task_result: Any,
+    exception_text: str | None,
+    *,
+    step_outputs: list[str] | None = None,
+) -> ExecutionSnapshot:
     state: dict[str, Any] = {}
     report = getattr(task_result, "report", "") if task_result is not None else ""
     output_files = [Path(path) for path in (getattr(task_result, "files", []) or [])]
@@ -1308,6 +1441,7 @@ def _build_snapshot(workspace_path: Path | None, task_result: Any, exception_tex
         state=state,
         report=report or "",
         output_files=output_files,
+        step_outputs=step_outputs or [],
         scripts=scripts,
         exception=exception_text,
     )
@@ -1324,17 +1458,60 @@ def _write_json(path: Path, data: Any) -> None:
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def classify_failure(result: dict[str, Any]) -> str | None:
+    if result.get("passed"):
+        return None
+
+    exception = str(result.get("exception") or "")
+    if exception:
+        if _is_transient_error(exception):
+            return "transient_error"
+        return "unhandled_exception"
+
+    assertions = result.get("assertions") or []
+    failed = [
+        item
+        for item in assertions
+        if item.get("required", True) and not item.get("passed")
+    ]
+    names = [str(item.get("name") or "") for item in failed]
+    details = "\n".join(str(item.get("detail") or "") for item in failed)
+
+    if any(name == "workspace_completed" for name in names):
+        return "workspace_not_completed"
+    if any(name == "report_non_empty" for name in names):
+        return "empty_report"
+    if any(name.startswith("expected_answer") for name in names):
+        if "No marked final answer" in details:
+            return "no_final_answer"
+        if "numbers_matched=False" in details or "expected_numbers=" in details:
+            return "wrong_numeric_answer"
+        return "wrong_answer"
+    if any(name.startswith("answer_workbook") for name in names):
+        return "wrong_workbook"
+    if any(name.startswith("required_output_ext") for name in names):
+        return "missing_artifact"
+    if any(name.endswith("_config") for name in names):
+        return "eval_config_error"
+    return "assertion_failed"
+
+
 def write_summary(run_dir: Path, results: list[dict[str, Any]]) -> None:
     passed = [result for result in results if result.get("passed")]
     failed = [result for result in results if not result.get("passed")]
+    category_counts = _count_by(results, lambda item: item.get("failure_category") or "passed")
     summary = {
         "run_dir": str(run_dir),
         "total": len(results),
         "passed": len(passed),
         "failed": len(failed),
+        "failure_categories": category_counts,
         "results": results,
     }
     _write_json(run_dir / "summary.json", summary)
+    _write_failures_csv(run_dir / "failures.csv", failed)
+    _write_count_csv(run_dir / "by_failure_category.csv", category_counts)
+    _write_count_csv(run_dir / "by_note.csv", _count_by_note(results))
 
     lines = [
         "# ChatExcel Eval Summary",
@@ -1343,16 +1520,78 @@ def write_summary(run_dir: Path, results: list[dict[str, Any]]) -> None:
         f"- Passed: {len(passed)}",
         f"- Failed: {len(failed)}",
         "",
+        "## Failure Categories",
+        "",
+        "| Category | Count |",
+        "|---|---:|",
+    ]
+    for category, count in sorted(category_counts.items(), key=lambda item: (-item[1], item[0])):
+        lines.append(f"| {category} | {count} |")
+    lines.extend([
+        "",
         "| Case | Result | Duration | Workspace |",
         "|---|---:|---:|---|",
-    ]
+    ])
     for result in results:
         case = result["case"]
         status = "PASS" if result.get("passed") else "FAIL"
+        if result.get("failure_category"):
+            status = f"{status} ({result['failure_category']})"
         lines.append(
             f"| {case['id']} | {status} | {result.get('duration_seconds', 0)}s | {result.get('workspace') or ''} |"
         )
     (run_dir / "summary.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _count_by(results: list[dict[str, Any]], key_fn: Any) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for result in results:
+        key = str(key_fn(result) or "unknown")
+        counts[key] = counts.get(key, 0) + 1
+    return counts
+
+
+def _count_by_note(results: list[dict[str, Any]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for result in results:
+        for note in result.get("case", {}).get("notes") or []:
+            key = str(note)
+            counts[key] = counts.get(key, 0) + 1
+    return counts
+
+
+def _write_count_csv(path: Path, counts: dict[str, int]) -> None:
+    with path.open("w", encoding="utf-8", newline="") as fh:
+        writer = csv.DictWriter(fh, fieldnames=["key", "count"])
+        writer.writeheader()
+        for key, count in sorted(counts.items(), key=lambda item: (-item[1], item[0])):
+            writer.writerow({"key": key, "count": count})
+
+
+def _write_failures_csv(path: Path, failed_results: list[dict[str, Any]]) -> None:
+    fieldnames = [
+        "case_id",
+        "failure_category",
+        "failed_assertions",
+        "duration_seconds",
+        "source",
+        "notes",
+        "workspace",
+    ]
+    with path.open("w", encoding="utf-8", newline="") as fh:
+        writer = csv.DictWriter(fh, fieldnames=fieldnames)
+        writer.writeheader()
+        for result in failed_results:
+            case = result.get("case", {})
+            writer.writerow({
+                "case_id": case.get("id", ""),
+                "failure_category": result.get("failure_category") or "",
+                "failed_assertions": ";".join(result.get("failed_assertions") or []),
+                "duration_seconds": result.get("duration_seconds", ""),
+                "source": case.get("source", ""),
+                "notes": ";".join(str(note) for note in case.get("notes", []) or []),
+                "workspace": result.get("workspace") or "",
+            })
 
 
 def default_manifests() -> list[Path]:
@@ -1374,16 +1613,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--benchmark",
         action="append",
-        choices=["spreadsheetbench", "spreadsheetbench-v2", "all"],
+        choices=["sheetbench", "spreadsheetbench", "spreadsheetbench-v2", "all"],
         default=[],
         help=(
             "Materialize and run a public benchmark. May repeat. "
-            "Defaults: spreadsheetbench=verified, spreadsheetbench-v2=example."
+            "Defaults: sheetbench=qa, spreadsheetbench=verified, spreadsheetbench-v2=example."
         ),
     )
     parser.add_argument(
         "--benchmark-variant",
-        help="Benchmark archive variant to use, e.g. verified/example/full.",
+        help="Benchmark variant to use, e.g. qa/complex-qa/verified/example/full.",
     )
     parser.add_argument(
         "--benchmark-data-dir",
