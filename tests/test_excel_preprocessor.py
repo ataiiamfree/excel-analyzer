@@ -297,6 +297,98 @@ def test_process_converts_group_title_rows_to_context_column(tmp_path):
     assert any("_context_group" in warning for warning in table.warnings)
 
 
+def test_context_group_ignores_notes_column_header(tmp_path):
+    workbook_path = tmp_path / "notes_header.xlsx"
+    workbook = openpyxl.Workbook()
+    ws = workbook.active
+    ws.title = "Sheet1"
+    ws.append(["Notes", "Project Name", "Quantity"])
+    ws.append(["First Floor", None, None])
+    ws.append(["ok", "Floor Tiles", 72.4])
+    workbook.save(workbook_path)
+
+    manifest = {
+        "manifest_path": "workbook_manifest.json",
+        "files": [
+            {
+                "path": str(workbook_path),
+                "sheets": [
+                    {
+                        "name": "Sheet1",
+                        "tables": [
+                            {
+                                "table_id": "Sheet1_t1",
+                                "range": "A1:C3",
+                                "header_candidates": [1],
+                            }
+                        ],
+                    }
+                ],
+            }
+        ],
+    }
+
+    result = ExcelPreprocessor().process(workbook_path, manifest)
+    table = result.tables[0]
+    path = Path(table.parquet_path)
+    dataframe = pd.read_parquet(path) if path.suffix == ".parquet" else pd.read_excel(path)
+
+    assert "_context_group" not in dataframe.columns
+    assert dataframe["Notes"].tolist()[0] == "First Floor"
+
+
+def test_context_group_requires_downstream_detail_row(tmp_path):
+    workbook_path = tmp_path / "orphan_group.xlsx"
+    workbook = openpyxl.Workbook()
+    ws = workbook.active
+    ws.title = "Sheet1"
+    ws.append(["Serial No.", "Project Name", "Quantity"])
+    ws.append(["First Floor", None, None])
+    workbook.save(workbook_path)
+
+    manifest = {
+        "manifest_path": "workbook_manifest.json",
+        "files": [
+            {
+                "path": str(workbook_path),
+                "sheets": [
+                    {
+                        "name": "Sheet1",
+                        "tables": [
+                            {
+                                "table_id": "Sheet1_t1",
+                                "range": "A1:C2",
+                                "header_candidates": [1],
+                            }
+                        ],
+                    }
+                ],
+            }
+        ],
+    }
+
+    result = ExcelPreprocessor().process(workbook_path, manifest)
+    table = result.tables[0]
+    path = Path(table.parquet_path)
+    dataframe = pd.read_parquet(path) if path.suffix == ".parquet" else pd.read_excel(path)
+
+    assert table.row_count == 1
+    assert "_context_group" not in dataframe.columns
+    assert dataframe.loc[0, "Serial No."] == "First Floor"
+
+
+def test_context_group_still_detects_first_floor_pattern():
+    preprocessor = ExcelPreprocessor()
+
+    label = preprocessor._context_group_label(
+        ["First Floor", None, None],
+        ["Serial No.", "Project Name", "Quantity"],
+        following_rows=[[1, "Floor Tiles", 72.4]],
+    )
+
+    assert label == "First Floor"
+
+
 def test_process_records_enum_and_oversized_metadata_without_truncating_data(tmp_path):
     workbook_path = tmp_path / "input.xlsx"
     long_text = "很长的说明" * 50

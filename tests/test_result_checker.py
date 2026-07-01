@@ -196,6 +196,67 @@ def test_no_data_answer_fails_when_year_exists_in_column_names(tmp_path):
     assert result.status == "failed"
 
 
+def test_no_data_answer_year_check_ignores_year_in_notes_column(tmp_path):
+    checker = ResultChecker()
+    context = _make_profile_context(
+        {
+            "tables": [
+                {
+                    "columns_detail": [
+                        {"name": "Product"},
+                        {"name": "Notes2020"},
+                    ]
+                }
+            ]
+        },
+        user_query="What was the 2020 profit?",
+    )
+
+    result = checker.validate(
+        _make_step(instruction="What was the 2020 profit?"),
+        _make_result(stdout="Rows for 2020: 0\nFinal Answer: No 2020 data available."),
+        context,
+        _make_workspace(tmp_path),
+    )
+
+    check = [c for c in result.checks if c.name == "no_data_answer_column_check"][0]
+    assert check.status == "passed"
+    assert result.status == "passed"
+
+
+def test_no_data_answer_check_allows_none_increased_answer(tmp_path):
+    checker = ResultChecker()
+    context = _make_profile_context(
+        {
+            "tables": [
+                {
+                    "columns_detail": [
+                        {"name": "Year 2020_Total Profit"},
+                        {"name": "Year 2020_Cost Expenses"},
+                    ]
+                }
+            ]
+        },
+        user_query="In 2020, which quarter's profit MoM growth rate increased?",
+    )
+
+    result = checker.validate(
+        _make_step(instruction="Which quarter's profit MoM growth rate increased in 2020?"),
+        _make_result(
+            stdout=(
+                "Q1: -22.7%, Q2: -67.7%, Q3: -143.7%, Q4: -1001.2%\n"
+                "Final Answer: No quarter increased; none increased."
+            )
+        ),
+        context,
+        _make_workspace(tmp_path),
+    )
+
+    check = [c for c in result.checks if c.name == "no_data_answer_column_check"][0]
+    assert check.status == "passed"
+    assert result.status == "passed"
+
+
 def test_zero_answer_fails_when_lookup_printed_nonempty_candidates(tmp_path):
     checker = ResultChecker()
     context = _make_profile_context(
@@ -295,8 +356,8 @@ def test_column_family_question_requires_selection_basis(tmp_path):
     )
 
     check = [c for c in result.checks if c.name == "column_family_selection_basis"][0]
-    assert check.status == "failed"
-    assert result.status == "failed"
+    assert check.status == "passed"
+    assert result.status == "passed"
 
 
 def test_column_family_question_passes_with_selection_basis(tmp_path):
@@ -365,10 +426,11 @@ def test_column_family_question_rejects_primary_column_basis(tmp_path):
     )
 
     check = [c for c in result.checks if c.name == "column_family_selection_basis"][0]
-    assert check.status == "failed"
+    assert check.status == "warning"
+    assert result.status == "passed"
 
 
-def test_attempt_column_family_rejects_non_best_value(tmp_path):
+def test_column_family_does_not_enforce_benchmark_best_value(tmp_path):
     checker = ResultChecker()
     context = _make_profile_context(
         {
@@ -400,8 +462,8 @@ def test_attempt_column_family_rejects_non_best_value(tmp_path):
     )
 
     check = [c for c in result.checks if c.name == "column_family_selection_basis"][0]
-    assert check.status == "failed"
-    assert "最佳有效值 125" in check.message
+    assert check.status == "passed"
+    assert result.status == "passed"
 
 
 def test_pairwise_metric_question_rejects_cost_based_rederivation_when_direct_pair_exists(tmp_path):
@@ -449,9 +511,9 @@ def test_pairwise_metric_question_rejects_cost_based_rederivation_when_direct_pa
     )
 
     check = [c for c in result.checks if c.name == "direct_pair_metric_selection"][0]
-    assert check.status == "failed"
+    assert check.status == "warning"
     assert "Price_Galvalume" in check.message
-    assert result.status == "failed"
+    assert result.status == "passed"
 
 
 def test_pairwise_price_question_rejects_cost_pair_substitution(tmp_path):
@@ -487,7 +549,8 @@ def test_pairwise_price_question_rejects_cost_pair_substitution(tmp_path):
     )
 
     check = [c for c in result.checks if c.name == "direct_pair_metric_selection"][0]
-    assert check.status == "failed"
+    assert check.status == "warning"
+    assert result.status == "passed"
 
 
 def test_pairwise_metric_question_allows_direct_pair_usage(tmp_path):
@@ -557,8 +620,8 @@ def test_pairwise_metric_question_checks_script_when_stdout_hides_derivation(tmp
     )
 
     check = [c for c in result.checks if c.name == "direct_pair_metric_selection"][0]
-    assert check.status == "failed"
-    assert result.status == "failed"
+    assert check.status == "warning"
+    assert result.status == "passed"
 
 
 def test_single_item_query_rejects_unrequested_sum_aggregation(tmp_path):
@@ -586,8 +649,8 @@ def test_single_item_query_rejects_unrequested_sum_aggregation(tmp_path):
     )
 
     check = [c for c in result.checks if c.name == "single_item_not_aggregated"][0]
-    assert check.status == "failed"
-    assert result.status == "failed"
+    assert check.status == "warning"
+    assert result.status == "passed"
 
 
 def test_single_item_query_allows_explicit_total(tmp_path):

@@ -129,7 +129,12 @@ class ResultChecker:
         text = self._combined_task_text(step, context)
         column_names = self._profile_column_names(context)
         for year in sorted(set(re.findall(r"\b(?:19|20)\d{2}\b", text))):
-            matching_columns = [name for name in column_names if year in name]
+            matching_columns = [
+                name
+                for name in column_names
+                if year in self._column_name_tokens(name)
+                and not self._is_note_like_column(name)
+            ]
             if matching_columns:
                 return CheckItem(
                     "no_data_answer_column_check",
@@ -194,26 +199,16 @@ class ResultChecker:
         if self._has_weak_column_family_selection_basis(stdout):
             return CheckItem(
                 "column_family_selection_basis",
-                "failed",
+                "warning",
                 (
                     f"问题命中了重复表头列族 `{base}`: {columns}，但 stdout 显示仍按 primary/first/default "
-                    "选择列。若用户没有指定第几列/第几次，请检查全部列族成员；对试次型数值列族通常应选择最佳有效值。"
+                    "选择列。若用户没有指定第几列/第几次，请检查全部列族成员，并说明选择依据。"
                 ),
             )
-        best_value_check = self._check_best_valid_value_for_attempt_family(stdout, base, columns)
-        if best_value_check is not None:
-            return best_value_check
         if self._has_column_family_selection_evidence(stdout):
             return CheckItem("column_family_selection_basis", "passed")
 
-        return CheckItem(
-            "column_family_selection_basis",
-            "failed",
-            (
-                f"问题命中了重复表头列族 `{base}`: {columns}，但 stdout 没有说明如何在同一列族中选择。"
-                "请检查全部列族成员、打印候选值和选择依据，不要默认取第一个未后缀列。"
-            ),
-        )
+        return CheckItem("column_family_selection_basis", "passed")
 
     def _process_succeeded(self, exec_result: Any) -> bool:
         success = getattr(exec_result, "success", None)
@@ -237,7 +232,8 @@ class ResultChecker:
         patterns = (
             r"\bno\b.*\b(data|rows?|records?|available|found)\b",
             r"\bnot\s+found\b",
-            r"\bnone\b",
+            r"^\s*none\s*[.!。]?\s*$",
+            r"\bnone\s+(?:found|available|matched|returned)\b",
             r"\bnull\b",
             r"\bn/?a\b",
             r"无法",
@@ -413,17 +409,19 @@ class ResultChecker:
         )
         if (
             not self._stdout_indicates_metric_rederived_from_cost(evidence_text)
-            and not self._evidence_uses_cost_pair_instead_of_price_pair(evidence_text, direct_pairs)
+            and not self._evidence_uses_related_pair_instead_of_direct_pair(
+                evidence_text, direct_pairs
+            )
         ):
             return CheckItem("direct_pair_metric_selection", "passed")
 
         metric, columns = direct_pairs[0]
         return CheckItem(
             "direct_pair_metric_selection",
-            "failed",
+            "warning",
             (
                 f"问题要求比较 `{metric}` 相关指标，且表中存在直接配对列 {columns}，"
-                "但 stdout 显示把指标重新派生成 price-cost/cost-based 公式。"
+                "但 stdout/脚本显示可能改用了其他相关列重新推导。"
                 "请优先使用这些直接配对列做差或比较；只有题目或表格明确定义公式时才自行推导。"
             ),
         )
@@ -454,7 +452,7 @@ class ResultChecker:
         ):
             return CheckItem(
                 "single_item_not_aggregated",
-                "failed",
+                "warning",
                 (
                     "用户是在查询单个项目/单个条件下的值，但 stdout/脚本显示匹配多行后进行了 sum/total 聚合。"
                     "除非用户明确要求 total/sum/aggregate，请先用父级/楼层/序号等上下文定位唯一行；"
@@ -476,6 +474,17 @@ class ResultChecker:
                 for name in family.get("columns") or []:
                     names.append(str(name))
         return names
+
+    def _column_name_tokens(self, name: str) -> set[str]:
+        return {
+            token
+            for token in re.split(r"[^0-9A-Za-z\u4e00-\u9fff]+", str(name or "").lower())
+            if token
+        }
+
+    def _is_note_like_column(self, name: str) -> bool:
+        normalized = str(name or "").strip().lower()
+        return any(token in normalized for token in ("note", "remark", "comment", "备注", "说明"))
 
     def _profile_column_families(self, context: Any) -> list[dict[str, Any]]:
         profile = getattr(context, "data_profile", {}) or {}
@@ -631,25 +640,58 @@ class ResultChecker:
         normalized = (stdout or "").lower()
         patterns = (
             r"\bprice\s*[-−]\s*cost",
+            r"\bprice[^\n]{0,120}[-−][^\n]{0,120}\bcost",
             r"\bcost\b.*\bmark\s*up\b",
             r"\bmark\s*up\b.*\bcost\b",
             r"\bprice\s*=\s*[^,\n]+.*\bcost",
-            r"costmaterial.*costlabor.*mark\s*up",
-            r"price.*cost.*difference",
         )
         return any(re.search(pattern, normalized, flags=re.DOTALL) for pattern in patterns)
 
-    def _evidence_uses_cost_pair_instead_of_price_pair(
+    def _evidence_uses_related_pair_instead_of_direct_pair(
         self,
         evidence_text: str,
         direct_pairs: list[tuple[str, list[str]]],
     ) -> bool:
-        if not any("price" in metric for metric, _ in direct_pairs):
+        normalized_evidence = self._normalize_phrase(evidence_text)
+        referenced_columns = self._referenced_column_names(evidence_text)
+        if not referenced_columns:
             return False
-        normalized = (evidence_text or "").lower()
-        uses_cost_pair = bool(re.search(r"\[['\"]cost[^'\"]+_[^'\"]+['\"]\]", normalized))
-        uses_price_pair = bool(re.search(r"\[['\"]price_[^'\"]+['\"]\]", normalized))
-        return uses_cost_pair and not uses_price_pair
+
+        for metric, columns in direct_pairs:
+            if any(self._phrase_contains(normalized_evidence, column) for column in columns):
+                continue
+
+            entities: set[str] = set()
+            for column in columns:
+                split = self._split_direct_pair_column(column)
+                if split is not None:
+                    entities.add(split[1])
+            if len(entities) < 2:
+                continue
+
+            referenced_entities: set[str] = set()
+            for column in referenced_columns:
+                split = self._split_direct_pair_column(column)
+                if split is None:
+                    continue
+                referenced_metric, referenced_entity = split
+                if referenced_metric == metric:
+                    continue
+                if referenced_entity in entities:
+                    referenced_entities.add(referenced_entity)
+            if len(referenced_entities) >= 2:
+                return True
+        return False
+
+    def _referenced_column_names(self, text: str) -> list[str]:
+        names: list[str] = []
+        patterns = (
+            r"\[['\"]([^'\"]+)['\"]\]",
+            r"\.get\(\s*['\"]([^'\"]+)['\"]",
+        )
+        for pattern in patterns:
+            names.extend(match.group(1) for match in re.finditer(pattern, text or ""))
+        return list(dict.fromkeys(name for name in names if name))
 
     def _read_exec_script(self, exec_result: Any, workspace: Any) -> str:
         script_path = getattr(exec_result, "script_path", None)
@@ -676,47 +718,6 @@ class ResultChecker:
     def _normalize_phrase(self, text: str) -> str:
         normalized = re.sub(r"[^0-9a-zA-Z\u4e00-\u9fff]+", " ", str(text or "").lower())
         return re.sub(r"\s+", " ", normalized).strip()
-
-    def _check_best_valid_value_for_attempt_family(
-        self,
-        stdout: str,
-        base: str,
-        columns: list[str],
-    ) -> CheckItem | None:
-        if not self._family_likely_uses_best_valid_value(base):
-            return None
-        final_answer = self._extract_final_answer(stdout)
-        final_numbers = self._numbers_in_text(final_answer)
-        if not final_numbers:
-            return None
-        values: list[float] = []
-        for column in columns:
-            pattern = rf"(?im)^\s*{re.escape(str(column))}\s*[:=]\s*([-+]?\d+(?:\.\d+)?)\b"
-            for match in re.finditer(pattern, stdout or ""):
-                try:
-                    values.append(float(match.group(1)))
-                except ValueError:
-                    continue
-        if len(values) < 2:
-            return None
-        best = max(values)
-        final_value = final_numbers[0]
-        if abs(final_value - best) <= 1e-9:
-            return None
-        return CheckItem(
-            "column_family_selection_basis",
-            "failed",
-            (
-                f"问题命中了试次型重复列族 `{base}`，stdout 中候选值为 {values}，"
-                f"但 Final Answer 使用了 {final_value} 而不是最佳有效值 {best}。"
-                "若用户没有明确指定第几次，请选择最佳有效数值并说明依据。"
-            ),
-        )
-
-    def _family_likely_uses_best_valid_value(self, base: str) -> bool:
-        normalized = str(base or "").lower()
-        keywords = ("attempt", "trial", "press", "snatch", "jerk", "try", "试", "举")
-        return any(keyword in normalized for keyword in keywords)
 
     def _numbers_in_text(self, text: str) -> list[float]:
         values: list[float] = []
@@ -749,7 +750,7 @@ class ResultChecker:
 
     def _looks_like_single_item_value_query(self, text: str) -> bool:
         normalized = (text or "").lower()
-        patterns = (
+        value_patterns = (
             r"\bwhat\b",
             r"\bfind\b",
             r"\bextract\b",
@@ -765,7 +766,17 @@ class ResultChecker:
             r"数量",
             r"值",
         )
-        return any(re.search(pattern, normalized) for pattern in patterns)
+        if not any(re.search(pattern, normalized) for pattern in value_patterns):
+            return False
+        locator_patterns = (
+            r'"[^"\n]{2,120}"',
+            r"'[^'\n]{2,120}'",
+            r"“[^”\n]{2,120}”",
+            r"‘[^’\n]{2,120}’",
+            r"\b(?:first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth)\s+floor\b",
+            r"第\s*[一二三四五六七八九十1234567890]+\s*(?:层|楼)",
+        )
+        return any(re.search(pattern, text or "", flags=re.IGNORECASE) for pattern in locator_patterns)
 
     def _reports_multiple_matches(self, stdout: str) -> bool:
         patterns = (

@@ -8,6 +8,7 @@ part of the prompt.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -40,6 +41,7 @@ class PromptAssembler:
         check_report: str | None = None,
         stdout: str | None = None,
     ) -> str:
+        task_hints = self._format_python_task_hints(context.data_profile)
         parts = [
             "代码执行或结果校验失败，请修正。只输出完整 Python 脚本，不要解释。\n"
             "重要：如果报错是 ModuleNotFoundError（模块未安装），你必须改用已安装的库来实现同样的功能，"
@@ -51,11 +53,8 @@ class PromptAssembler:
                 "筛选条件、列选择、聚合口径和空结果原因。问答类任务最后必须打印一行 `Final Answer: ...`。"
                 "如果筛选得到 0 行或答案为 0/空值，先检查条件是否其实出现在列名、重复列族或父级/分组行上下文中，"
                 "并在 stdout 中打印候选列、候选行和最终选择依据。"
-                "如果数据概况或列名包含 `_context_group`/`_context_*`，这些列表示从父级/楼层/分组标题行提取的上下文；"
-                "遇到楼层、区域、部门、类别等条件时应优先用这些上下文列过滤明细行，不要误用 Unit/单位/计量单位列。"
                 "如果校验信息提到重复表头列族，且用户没有明确指定第几列/第几次，禁止用 primary/main/first column "
-                "作为选择依据；必须比较同一列族全部有效值。对于 attempt/trial/试次/举重试举这类数值列族，"
-                "通常应选择最佳有效数值，并说明所有候选值。"
+                "作为选择依据；必须比较同一列族全部有效值并说明选择依据。"
             ),
             f"## 当前步骤\n{step.description}\n{step.instruction}",
             f"## 数据概况\n{self.format_profile_for_prompt(context.data_profile)}",
@@ -63,6 +62,8 @@ class PromptAssembler:
             f"## 失败代码\n```python\n{failed_code}\n```",
             f"## stderr\n{(stderr or '')[-2000:]}",
         ]
+        if task_hints:
+            parts.append(task_hints)
         if stdout:
             parts.append(f"## stdout\n{stdout[-4000:]}")
         if check_report:
@@ -122,6 +123,13 @@ class PromptAssembler:
             PromptSection(
                 "profile_hints",
                 self._format_profile_hints(context.data_profile),
+                True,
+            ),
+            PromptSection(
+                "task_hints",
+                self._format_python_task_hints(context.data_profile)
+                if current_step.tool == "python"
+                else "",
                 True,
             ),
             PromptSection(
@@ -319,12 +327,8 @@ class PromptAssembler:
 
     def _format_profile_hints(self, profile: dict[str, Any]) -> str:
         tables = profile.get("tables", []) if isinstance(profile, dict) else []
-        has_column_families = any(table.get("column_families") for table in tables)
-        has_context_columns = any(
-            str((column.get("name") if isinstance(column, dict) else "") or "").startswith("_context_")
-            for table in tables
-            for column in table.get("columns_detail") or []
-        )
+        has_column_families = self._has_column_families(tables)
+        has_context_columns = self._has_context_columns(tables)
         if not has_column_families and not has_context_columns:
             return ""
         lines = ["## 表结构提示"]
@@ -341,11 +345,88 @@ class PromptAssembler:
                 [
                     "- `column_families` 表示 Excel 重复/多级表头被展开成同一逻辑列族，"
                     "如 `value`, `value_2`, `value_3`；回答前检查全族列，按问题选择成员，不要默认取第一个。",
-                    "- 对 attempt/trial/试次型列族，若问题未指定第几次，应比较所有有效值并说明选择依据。",
                     "- 若年份、季度、地区、材料、指标名出现在列名中，优先选列，不要误拿这些条件筛普通行。",
                 ]
             )
         return "\n".join(lines)
+
+    def _format_python_task_hints(self, profile: dict[str, Any]) -> str:
+        tables = profile.get("tables", []) if isinstance(profile, dict) else []
+        if not tables:
+            return ""
+
+        lines: list[str] = []
+        if self._has_context_columns(tables):
+            lines.extend(
+                [
+                    "`_context_*` 列表示从父级/楼层/分组标题行提取并下传到明细行的上下文。",
+                    "遇到楼层、区域、部门、类别等条件时，优先用 `_context_*` 过滤明细行；不要把 Unit/单位/计量单位列当作楼层或分组列。",
+                ]
+            )
+        if self._has_column_families(tables):
+            lines.extend(
+                [
+                    "`column_families` 表示同一逻辑字段的多个表头成员；回答前检查全族列并按用户问题选择成员，不要默认取第一个。",
+                    "如果用户没有明确指定第几列/第几次，stdout 中应打印候选列和选择依据。",
+                ]
+            )
+        if self._has_rate_columns(tables):
+            lines.append(
+                "处理 rate/ratio/percentage/growth 字段时，不要仅因为数值绝对值大于 1 就除以 100；只有列名/单位明确含 % 或样例显示 whole-percent 口径时才转换。"
+            )
+        if self._has_price_or_cost_pair_columns(tables):
+            lines.extend(
+                [
+                    "当问题引用一个业务指标名但没有完全同名列时，应先列出最接近的列名并选择最接近问题语义的列；不要在工作簿没有定义的情况下自行改造成派生公式。",
+                    "如果问题是在比较 A/B 两个实体、材料、地区、年份或版本的某个指标，且表中存在共享同一指标词的 A/B 配对列，应直接使用这些配对列做差或比较。",
+                ]
+            )
+        if not lines:
+            return ""
+        return "## Python 任务提示\n" + "\n".join(f"- {line}" for line in lines)
+
+    def _has_context_columns(self, tables: list[dict[str, Any]]) -> bool:
+        return any(
+            str((column.get("name") if isinstance(column, dict) else "") or "").startswith("_context_")
+            for table in tables
+            for column in table.get("columns_detail") or []
+        )
+
+    def _has_column_families(self, tables: list[dict[str, Any]]) -> bool:
+        return any(table.get("column_families") for table in tables)
+
+    def _has_rate_columns(self, tables: list[dict[str, Any]]) -> bool:
+        names = self._profile_column_names(tables)
+        patterns = ("rate", "ratio", "percentage", "growth", "%", "比率", "比例", "增长率", "率")
+        return any(any(pattern in name.lower() for pattern in patterns) for name in names)
+
+    def _has_price_or_cost_pair_columns(self, tables: list[dict[str, Any]]) -> bool:
+        names = self._profile_column_names(tables)
+        for prefix in ("price", "cost"):
+            count = sum(
+                1
+                for name in names
+                if self._is_prefix_pair_column(prefix, name)
+            )
+            if count >= 2:
+                return True
+        return False
+
+    def _is_prefix_pair_column(self, prefix: str, name: str) -> bool:
+        return bool(re.match(rf"^{re.escape(prefix)}(?:[\s_/\-]+|$)", str(name or "").lower()))
+
+    def _profile_column_names(self, tables: list[dict[str, Any]]) -> list[str]:
+        names: list[str] = []
+        for table in tables:
+            for column in table.get("columns_detail") or []:
+                name = column.get("name") if isinstance(column, dict) else None
+                if name:
+                    names.append(str(name))
+            for family in table.get("column_families") or []:
+                for name in family.get("columns") or []:
+                    if name:
+                        names.append(str(name))
+        return names
 
     def _format_plan_overview(self, plan: Any, current_step_id: str) -> str:
         if plan is None:
@@ -381,21 +462,10 @@ class PromptAssembler:
                 "当用户询问哪些项目、措施、items、list、all、compare 多个对象时，输出全部匹配项，不要只取第一行。"
                 "当用户询问单个命名项目/产品/工程项的数值时，优先定位该项目行；父级/楼层/分组行只作为上下文，"
                 "除非问题明确要求 total/sum/aggregate，不要把同一父级下的多行求和。"
-                "如果 normalized 表包含 `_context_group` 或其他 `_context_*` 列，说明预处理已经把父级/楼层/分组标题"
-                "下传到明细行；遇到 first floor/region/category/department 等条件时优先用这些列过滤，"
-                "不要把 Unit、单位、计量单位列当作楼层/分组。"
                 "如果同一 sheet 出现多张同 schema 表，或 warnings 提示续表块，应先 concat 后再筛选/汇总。"
                 "层级表或合并单元格展开表中，父级/分组标签可能适用于后续多行；"
                 "按子项筛选前应检查是否需要对父级上下文列做 forward-fill 或基于相邻行重建分组范围。"
                 "复杂表中可能有重复表头行或合并单元格展开后的标签行，计算前应过滤明显 header-like 行。"
-                "处理 rate/ratio/percentage/growth 字段时，不要仅因为数值绝对值大于 1 就除以 100；"
-                "只有列名/单位明确含 % 或样例显示 whole-percent 口径时才转换，"
-                "否则应保留工作簿原始比率值并在 stdout 打印单位判断依据。"
-                "当问题引用一个业务指标名但没有完全同名列时，应先列出最接近的列名并选择最接近问题语义的列；"
-                "不要在工作簿没有定义的情况下自行把该指标改造成 price-cost、cost/price 等派生公式。"
-                "如果问题是在比较 A/B 两个实体、材料、地区、年份或版本的某个指标，且表中存在共享同一指标词的配对列"
-                "（如 Price_A/Price_B、Sales_2023/Sales_2024、Revenue_US/Revenue_EU），"
-                "应直接使用这些配对列做差或比较，不要改用其他列重新推导。"
                 "如果最终答案仍是空、0、N/A 或 Not Found，stdout 中必须同时打印使用的列名、筛选条件和候选值，便于复核。"
                 "把图表和明细写入 output/，用 print 输出摘要和口径。"
             )

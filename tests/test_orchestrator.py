@@ -86,7 +86,11 @@ class SuccessOrchestrator(Orchestrator):
 
 
 def _make_config():
-    return SimpleNamespace(sandbox_timeout=10, max_repair_attempts=1)
+    return SimpleNamespace(
+        sandbox_timeout=10,
+        max_repair_attempts=1,
+        max_semantic_repair_attempts=1,
+    )
 
 
 def test_orchestrator_does_not_mark_failed_step_done():
@@ -164,6 +168,7 @@ def test_orchestrator_repeats_check_repair_until_budget_passes():
             workspace,
             reasoning_callback=None,
             repair_index=0,
+            llm_failure_count=0,
         ):
             self.repair_indexes.append(repair_index)
             stdout = "still bad" if repair_index == 0 else "fixed"
@@ -174,7 +179,11 @@ def test_orchestrator_repeats_check_repair_until_budget_passes():
     context = TaskContext("t1", "q", {}, {}, plan=plan)
     workspace = FakeWorkspace()
     tools = SimpleNamespace(checker=StdoutChecker())
-    config = SimpleNamespace(sandbox_timeout=10, max_repair_attempts=2)
+    config = SimpleNamespace(
+        sandbox_timeout=10,
+        max_repair_attempts=2,
+        max_semantic_repair_attempts=2,
+    )
     orchestrator = RepairingOrchestrator(llm_client=None, tools=tools, config=config)
 
     result = asyncio.run(orchestrator.run_plan(plan, context, workspace))
@@ -184,7 +193,62 @@ def test_orchestrator_repeats_check_repair_until_budget_passes():
     assert plan.get_step("s1").status == "done"
 
 
-def test_orchestrator_handles_check_repair_llm_failure():
+def test_semantic_repair_uses_own_budget():
+    class AlwaysFailChecker:
+        def validate(self, step, result, context, workspace):
+            return CheckResult(
+                step_id=step.id,
+                status="failed",
+                checks=[CheckItem("still_wrong", "failed")],
+            )
+
+    class RepairBudgetOrchestrator(Orchestrator):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.repair_indexes = []
+
+        async def _execute_step(self, step, context, workspace, reasoning_callback=None):
+            return StepResult(stdout="bad initial", files=[], script_path="s1_attempt_0.py")
+
+        async def _repair_from_check(
+            self,
+            step,
+            result,
+            check,
+            context,
+            workspace,
+            reasoning_callback=None,
+            repair_index=0,
+            llm_failure_count=0,
+        ):
+            self.repair_indexes.append(repair_index)
+            return StepResult(stdout="still bad", files=[], script_path=f"s1_attempt_{repair_index + 1}.py")
+
+    step = Step(id="s1", tool="python", description="fix me", instruction="fix me")
+    plan = ExecutionPlan([step])
+    context = TaskContext("t1", "q", {}, {}, plan=plan)
+    workspace = FakeWorkspace()
+    tools = SimpleNamespace(checker=AlwaysFailChecker())
+    config = SimpleNamespace(
+        sandbox_timeout=10,
+        max_repair_attempts=3,
+        max_semantic_repair_attempts=1,
+    )
+    orchestrator = RepairBudgetOrchestrator(llm_client=None, tools=tools, config=config)
+
+    result = asyncio.run(orchestrator.run_plan(plan, context, workspace))
+
+    assert result.failed is True
+    assert orchestrator.repair_indexes == [0]
+    assert plan.get_step("s1").status == "failed"
+
+
+def test_orchestrator_handles_check_repair_llm_failure(monkeypatch):
+    async def fake_sleep(delay):
+        return None
+
+    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+
     class FailingRepairLLM:
         async def call(self, *args, **kwargs):
             raise RuntimeError("empty repair response")
@@ -208,6 +272,47 @@ def test_orchestrator_handles_check_repair_llm_failure():
 
     assert result.failed is True
     assert plan.get_step("s1").status == "failed"
+    assert "结果校验修复失败" in result.error_summary
+
+
+def test_repair_gives_up_after_repeated_llm_exceptions(monkeypatch):
+    sleep_calls = []
+
+    async def fake_sleep(delay):
+        sleep_calls.append(delay)
+
+    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+
+    class FailingRepairLLM:
+        def __init__(self):
+            self.calls = 0
+
+        async def call(self, *args, **kwargs):
+            self.calls += 1
+            raise RuntimeError("empty repair response")
+
+    class CheckFailingOrchestrator(Orchestrator):
+        async def _execute_step(self, step, context, workspace, reasoning_callback=None):
+            return StepResult(stdout="bad result", files=[], script_path="s1_attempt_0.py")
+
+    step = Step(id="s1", tool="python", description="needs repair", instruction="needs repair")
+    plan = ExecutionPlan([step])
+    context = TaskContext("t1", "q", {}, {}, plan=plan)
+    workspace = FakeWorkspace()
+    tools = SimpleNamespace(checker=FakeChecker("failed"))
+    llm = FailingRepairLLM()
+    config = SimpleNamespace(
+        sandbox_timeout=10,
+        max_repair_attempts=1,
+        max_semantic_repair_attempts=3,
+    )
+    orchestrator = CheckFailingOrchestrator(llm_client=llm, tools=tools, config=config)
+
+    result = asyncio.run(orchestrator.run_plan(plan, context, workspace))
+
+    assert result.failed is True
+    assert llm.calls == 2
+    assert sleep_calls == [1, 2]
     assert "结果校验修复失败" in result.error_summary
 
 
@@ -591,8 +696,11 @@ def test_planner_prompt_preserves_direct_metric_columns():
 
     asyncio.run(orch._plan(context, Session(session_id="s1", file_path="input.xlsx")))
 
-    assert "Price_A/Price_B" in llm.prompt
-    assert "不要把用户提到但表中未完全同名的指标擅自改写成" in llm.prompt
+    assert "共享同一指标词的 A/B 配对字段" in llm.prompt
+    assert "Price_Galvalume" in llm.prompt
+    assert "Price_Painted" in llm.prompt
+    assert "Price_A/Price_B" not in llm.prompt
+    assert "不要把用户提到但表中未完全同名的指标擅自改写成工作簿没有定义的派生公式" in llm.prompt
 
 
 def test_execute_artifact_qa_uses_manifest_and_script():

@@ -6,6 +6,7 @@ business data is not excluded unless the evidence is stronger than a keyword.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -163,7 +164,11 @@ class ExcelPreprocessor:
         for rel_idx, values in enumerate(rows, start=1):
             if rel_idx <= header_rel:
                 continue
-            context_label = self._context_group_label(values, headers)
+            context_label = self._context_group_label(
+                values,
+                headers,
+                following_rows=rows[rel_idx:],
+            )
             if context_label:
                 current_context_group = context_label
                 detected_context_groups = True
@@ -231,7 +236,14 @@ class ExcelPreprocessor:
             warnings=warnings,
         )
 
-    def _context_group_label(self, values: list[Any], headers: list[str]) -> str | None:
+    def _context_group_label(
+        self,
+        values: list[Any],
+        headers: list[str],
+        following_rows: list[list[Any]] | None = None,
+        *,
+        require_downstream_detail: bool = True,
+    ) -> str | None:
         visible_values = values[: len(headers)]
         indexed_values = [
             (index, value)
@@ -263,18 +275,64 @@ class ExcelPreprocessor:
             return label
 
         first_header = headers[0].strip().lower() if headers else ""
-        first_header_looks_like_id = any(
-            token in first_header
-            for token in ("serial", "no", "编号", "序号", "id", "#")
+        first_header_tokens = self._header_tokens(first_header)
+        first_header_looks_like_id = bool(
+            first_header_tokens.intersection({"serial", "no", "编号", "序号", "id"})
+            or first_header == "#"
         )
         if (
             len(indexed_values) == 1
             and first_index == 0
             and len(headers) >= 3
             and first_header_looks_like_id
+            and (
+                not require_downstream_detail
+                or self._has_downstream_detail_row(following_rows or [], headers)
+            )
         ):
             return label
         return None
+
+    def _header_tokens(self, header: str) -> set[str]:
+        tokens = {
+            token
+            for token in re.split(r"[\s_/\-]+", str(header or "").strip().lower())
+            if token
+        }
+        if str(header or "").strip() == "#":
+            tokens.add("#")
+        return tokens
+
+    def _has_downstream_detail_row(
+        self,
+        following_rows: list[list[Any]],
+        headers: list[str],
+    ) -> bool:
+        for row in following_rows:
+            visible_values = row[: len(headers)]
+            if not any(value not in (None, "") for value in visible_values):
+                continue
+            if self._context_group_label(
+                visible_values,
+                headers,
+                following_rows=None,
+                require_downstream_detail=False,
+            ):
+                continue
+            if self._row_has_context_detail_values(visible_values, headers):
+                return True
+        return False
+
+    def _row_has_context_detail_values(self, values: list[Any], headers: list[str]) -> bool:
+        indexed_values = [
+            value
+            for index, value in enumerate(values[: len(headers)])
+            if value not in (None, "")
+            and not self._is_context_ignorable_column(headers[index] if index < len(headers) else "")
+        ]
+        if any(isinstance(value, (int, float)) for value in indexed_values):
+            return True
+        return len(indexed_values) >= 2
 
     def _is_context_ignorable_column(self, header: str) -> bool:
         normalized = str(header or "").strip().lower()
