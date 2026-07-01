@@ -38,6 +38,7 @@ class PromptAssembler:
         failed_code: str,
         stderr: str,
         check_report: str | None = None,
+        stdout: str | None = None,
     ) -> str:
         parts = [
             "代码执行或结果校验失败，请修正。只输出完整 Python 脚本，不要解释。\n"
@@ -45,12 +46,25 @@ class PromptAssembler:
             "绝对不要再次导入报错的模块。"
             "可用库：pandas, numpy, matplotlib, openpyxl, seaborn, scipy, pathlib, json, re, collections。"
             "代码中的字符串请使用英文引号，不要使用中文引号。",
+            (
+                "如果这是结果校验失败而不是 Python 异常，不要只修格式；必须根据 stdout、数据概况和列名重新检查"
+                "筛选条件、列选择、聚合口径和空结果原因。问答类任务最后必须打印一行 `Final Answer: ...`。"
+                "如果筛选得到 0 行或答案为 0/空值，先检查条件是否其实出现在列名、重复列族或父级/分组行上下文中，"
+                "并在 stdout 中打印候选列、候选行和最终选择依据。"
+                "如果数据概况或列名包含 `_context_group`/`_context_*`，这些列表示从父级/楼层/分组标题行提取的上下文；"
+                "遇到楼层、区域、部门、类别等条件时应优先用这些上下文列过滤明细行，不要误用 Unit/单位/计量单位列。"
+                "如果校验信息提到重复表头列族，且用户没有明确指定第几列/第几次，禁止用 primary/main/first column "
+                "作为选择依据；必须比较同一列族全部有效值。对于 attempt/trial/试次/举重试举这类数值列族，"
+                "通常应选择最佳有效数值，并说明所有候选值。"
+            ),
             f"## 当前步骤\n{step.description}\n{step.instruction}",
             f"## 数据概况\n{self.format_profile_for_prompt(context.data_profile)}",
             f"## 可用产物\n{self._format_json(context.artifact_manifest)}",
             f"## 失败代码\n```python\n{failed_code}\n```",
             f"## stderr\n{(stderr or '')[-2000:]}",
         ]
+        if stdout:
+            parts.append(f"## stdout\n{stdout[-4000:]}")
         if check_report:
             parts.append(f"## 结果校验失败信息\n{check_report[-2000:]}")
         return "\n\n".join(parts)
@@ -104,6 +118,11 @@ class PromptAssembler:
             PromptSection(
                 "profile",
                 f"## 数据概况\n{self.format_profile_for_prompt(context.data_profile)}",
+            ),
+            PromptSection(
+                "profile_hints",
+                self._format_profile_hints(context.data_profile),
+                True,
             ),
             PromptSection(
                 "plan",
@@ -248,6 +267,10 @@ class PromptAssembler:
             if enum_text:
                 lines.append(f"   enum_columns: {enum_text}")
 
+            family_text = self._compact_column_families(table.get("column_families") or [])
+            if family_text:
+                lines.append(f"   column_families: {family_text}")
+
             warnings = table.get("warnings") or []
             if warnings:
                 lines.append(f"   warnings: {'; '.join(map(str, warnings[:3]))}")
@@ -281,6 +304,49 @@ class PromptAssembler:
             parts.append(f"{name}=[{preview}{suffix}]")
         return "; ".join(parts)
 
+    def _compact_column_families(self, families: list[dict[str, Any]]) -> str:
+        parts = []
+        for family in families[:8]:
+            base = family.get("base")
+            columns = family.get("columns") or []
+            if not base or not isinstance(columns, list) or len(columns) < 2:
+                continue
+            preview = ", ".join(map(str, columns[:8]))
+            suffix = "..." if len(columns) > 8 else ""
+            kind = family.get("kind", "column_family")
+            parts.append(f"{base}({kind})=[{preview}{suffix}]")
+        return "; ".join(parts)
+
+    def _format_profile_hints(self, profile: dict[str, Any]) -> str:
+        tables = profile.get("tables", []) if isinstance(profile, dict) else []
+        has_column_families = any(table.get("column_families") for table in tables)
+        has_context_columns = any(
+            str((column.get("name") if isinstance(column, dict) else "") or "").startswith("_context_")
+            for table in tables
+            for column in table.get("columns_detail") or []
+        )
+        if not has_column_families and not has_context_columns:
+            return ""
+        lines = ["## 表结构提示"]
+        if has_context_columns:
+            lines.extend(
+                [
+                    "- `_context_*` 列表示从父级/楼层/分组标题行提取并下传到明细行的上下文。",
+                    "- 遇到楼层、区域、部门、类别等条件时，优先用 `_context_*` 过滤明细行；"
+                    "不要把 Unit/单位/计量单位列当作楼层或分组列。",
+                ]
+            )
+        if has_column_families:
+            lines.extend(
+                [
+                    "- `column_families` 表示 Excel 重复/多级表头被展开成同一逻辑列族，"
+                    "如 `value`, `value_2`, `value_3`；回答前检查全族列，按问题选择成员，不要默认取第一个。",
+                    "- 对 attempt/trial/试次型列族，若问题未指定第几次，应比较所有有效值并说明选择依据。",
+                    "- 若年份、季度、地区、材料、指标名出现在列名中，优先选列，不要误拿这些条件筛普通行。",
+                ]
+            )
+        return "\n".join(lines)
+
     def _format_plan_overview(self, plan: Any, current_step_id: str) -> str:
         if plan is None:
             return "尚未生成计划"
@@ -313,7 +379,23 @@ class PromptAssembler:
                 "difflib fuzzy candidates 的顺序回退。"
                 "如果 exact 匹配为 0 行，不要直接输出 Not Found/N/A；必须打印候选值、尝试包含或模糊匹配后再决定。"
                 "当用户询问哪些项目、措施、items、list、all、compare 多个对象时，输出全部匹配项，不要只取第一行。"
+                "当用户询问单个命名项目/产品/工程项的数值时，优先定位该项目行；父级/楼层/分组行只作为上下文，"
+                "除非问题明确要求 total/sum/aggregate，不要把同一父级下的多行求和。"
+                "如果 normalized 表包含 `_context_group` 或其他 `_context_*` 列，说明预处理已经把父级/楼层/分组标题"
+                "下传到明细行；遇到 first floor/region/category/department 等条件时优先用这些列过滤，"
+                "不要把 Unit、单位、计量单位列当作楼层/分组。"
+                "如果同一 sheet 出现多张同 schema 表，或 warnings 提示续表块，应先 concat 后再筛选/汇总。"
+                "层级表或合并单元格展开表中，父级/分组标签可能适用于后续多行；"
+                "按子项筛选前应检查是否需要对父级上下文列做 forward-fill 或基于相邻行重建分组范围。"
                 "复杂表中可能有重复表头行或合并单元格展开后的标签行，计算前应过滤明显 header-like 行。"
+                "处理 rate/ratio/percentage/growth 字段时，不要仅因为数值绝对值大于 1 就除以 100；"
+                "只有列名/单位明确含 % 或样例显示 whole-percent 口径时才转换，"
+                "否则应保留工作簿原始比率值并在 stdout 打印单位判断依据。"
+                "当问题引用一个业务指标名但没有完全同名列时，应先列出最接近的列名并选择最接近问题语义的列；"
+                "不要在工作簿没有定义的情况下自行把该指标改造成 price-cost、cost/price 等派生公式。"
+                "如果问题是在比较 A/B 两个实体、材料、地区、年份或版本的某个指标，且表中存在共享同一指标词的配对列"
+                "（如 Price_A/Price_B、Sales_2023/Sales_2024、Revenue_US/Revenue_EU），"
+                "应直接使用这些配对列做差或比较，不要改用其他列重新推导。"
                 "如果最终答案仍是空、0、N/A 或 Not Found，stdout 中必须同时打印使用的列名、筛选条件和候选值，便于复核。"
                 "把图表和明细写入 output/，用 print 输出摘要和口径。"
             )

@@ -60,6 +60,9 @@ class FakeWorkspace:
     def read_text(self, path):
         return ""
 
+    def record_code(self, *args, **kwargs):
+        pass
+
 
 class CancelWorkspace(FakeWorkspace):
     def is_cancel_requested(self):
@@ -79,7 +82,7 @@ class FailingOrchestrator(Orchestrator):
 
 class SuccessOrchestrator(Orchestrator):
     async def _execute_step(self, step, context, workspace, reasoning_callback=None):
-        return StepResult(stdout="分析完成: 总计 100 行", files=[])
+        return StepResult(stdout="分析完成: 总计 100 行\nFinal Answer: 100 行", files=[])
 
 
 def _make_config():
@@ -132,6 +135,80 @@ def test_orchestrator_success_path():
     assert plan.get_step("s2").status == "done"
     assert any(state["status"] == "completed" for state in workspace.states)
     assert len(context.step_summaries) == 2
+
+
+def test_orchestrator_repeats_check_repair_until_budget_passes():
+    class StdoutChecker:
+        def validate(self, step, result, context, workspace):
+            status = "passed" if result.stdout == "fixed" else "failed"
+            return CheckResult(
+                step_id=step.id,
+                status=status,
+                checks=[CheckItem("stdout_is_fixed", status)],
+            )
+
+    class RepairingOrchestrator(Orchestrator):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.repair_indexes = []
+
+        async def _execute_step(self, step, context, workspace, reasoning_callback=None):
+            return StepResult(stdout="bad initial", files=[], script_path="s1_attempt_0.py")
+
+        async def _repair_from_check(
+            self,
+            step,
+            result,
+            check,
+            context,
+            workspace,
+            reasoning_callback=None,
+            repair_index=0,
+        ):
+            self.repair_indexes.append(repair_index)
+            stdout = "still bad" if repair_index == 0 else "fixed"
+            return StepResult(stdout=stdout, files=[], script_path=f"s1_attempt_{repair_index + 1}.py")
+
+    step = Step(id="s1", tool="python", description="fix me", instruction="fix me")
+    plan = ExecutionPlan([step])
+    context = TaskContext("t1", "q", {}, {}, plan=plan)
+    workspace = FakeWorkspace()
+    tools = SimpleNamespace(checker=StdoutChecker())
+    config = SimpleNamespace(sandbox_timeout=10, max_repair_attempts=2)
+    orchestrator = RepairingOrchestrator(llm_client=None, tools=tools, config=config)
+
+    result = asyncio.run(orchestrator.run_plan(plan, context, workspace))
+
+    assert result.failed is False
+    assert orchestrator.repair_indexes == [0, 1]
+    assert plan.get_step("s1").status == "done"
+
+
+def test_orchestrator_handles_check_repair_llm_failure():
+    class FailingRepairLLM:
+        async def call(self, *args, **kwargs):
+            raise RuntimeError("empty repair response")
+
+    class CheckFailingOrchestrator(Orchestrator):
+        async def _execute_step(self, step, context, workspace, reasoning_callback=None):
+            return StepResult(stdout="bad result", files=[], script_path="s1_attempt_0.py")
+
+    step = Step(id="s1", tool="python", description="needs repair", instruction="needs repair")
+    plan = ExecutionPlan([step])
+    context = TaskContext("t1", "q", {}, {}, plan=plan)
+    workspace = FakeWorkspace()
+    tools = SimpleNamespace(checker=FakeChecker("failed"))
+    orchestrator = CheckFailingOrchestrator(
+        llm_client=FailingRepairLLM(),
+        tools=tools,
+        config=_make_config(),
+    )
+
+    result = asyncio.run(orchestrator.run_plan(plan, context, workspace))
+
+    assert result.failed is True
+    assert plan.get_step("s1").status == "failed"
+    assert "结果校验修复失败" in result.error_summary
 
 
 def test_orchestrator_unknown_tool():
@@ -468,6 +545,54 @@ def test_plan_routes_artifact_followup_to_artifact_qa(tmp_path):
 
     assert len(plan.steps) == 1
     assert plan.steps[0].tool == "artifact_qa"
+
+
+def test_planner_prompt_preserves_direct_metric_columns():
+    class RecordingLLM:
+        def __init__(self):
+            self.prompt = ""
+
+        async def call(self, prompt, max_tokens=2000, temperature=0.1, thinking=None):
+            self.prompt = prompt
+            return json.dumps({
+                "steps": [
+                    {
+                        "id": "s1",
+                        "tool": "python",
+                        "description": "compare prices",
+                        "instruction": "compare direct price columns",
+                        "is_exploratory": False,
+                        "depends_on": [],
+                    }
+                ],
+                "report_outline": [],
+            })
+
+    llm = RecordingLLM()
+    orch = Orchestrator(llm_client=llm, tools=None, config=_make_config())
+    context = TaskContext(
+        task_id="t1",
+        user_query="What is the difference in Mark Up Price between Painted and Galvalume?",
+        workbook_manifest={},
+        data_profile={
+            "tables": [
+                {
+                    "table_id": "Sheet1_t1",
+                    "path": "normalized/Sheet1_t1.parquet",
+                    "shape": {"rows": 1, "cols": 2},
+                    "columns_detail": [
+                        {"name": "Price_Galvalume", "dtype": "float64"},
+                        {"name": "Price_Painted", "dtype": "float64"},
+                    ],
+                }
+            ]
+        },
+    )
+
+    asyncio.run(orch._plan(context, Session(session_id="s1", file_path="input.xlsx")))
+
+    assert "Price_A/Price_B" in llm.prompt
+    assert "不要把用户提到但表中未完全同名的指标擅自改写成" in llm.prompt
 
 
 def test_execute_artifact_qa_uses_manifest_and_script():

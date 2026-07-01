@@ -68,15 +68,26 @@ class ExcelPreprocessor:
                 ws_values = workbook_values[sheet_info["name"]]
                 # Step 1: 拆分合并单元格并填充
                 self._unmerge_and_fill(worksheet, ws_values)
+                previous_headers_by_width: dict[int, list[str]] = {}
                 for table_candidate in sheet_info.get("tables", []):
+                    fallback_headers = previous_headers_by_width.get(
+                        self._table_candidate_width(str(table_candidate["range"]))
+                    )
                     table = self._normalize_table(
                         file_path=file_path,
                         worksheet=worksheet,
                         ws_values=ws_values,
                         table_candidate=table_candidate,
                         normalized_dir=normalized_dir,
+                        fallback_headers=fallback_headers,
                     )
                     tables.append(table)
+                    visible_headers = [
+                        str(column.get("name"))
+                        for column in table.columns
+                        if column.get("name") and not str(column.get("name")).startswith("_source_")
+                    ]
+                    previous_headers_by_width[len(visible_headers)] = visible_headers
 
         return PreprocessResult(
             workbook_manifest_path=self.normalize_manifest_path(manifest),
@@ -94,6 +105,7 @@ class ExcelPreprocessor:
         ws_values: Any,
         table_candidate: dict[str, Any],
         normalized_dir: Path,
+        fallback_headers: list[str] | None = None,
     ) -> NormalizedTable:
         range_ref = str(table_candidate["range"])
         bounds = range_boundaries(range_ref)
@@ -116,24 +128,49 @@ class ExcelPreprocessor:
             for row_idx in range(min_row, max_row + 1)
         ]
         header_candidates = table_candidate.get("header_candidates") or [min_row]
-        header_start_abs, header_end_abs = self._detect_header_range(header_candidates, default=min_row)
-        header_rel = max(1, header_end_abs - min_row + 1)
-        header_depth = header_end_abs - header_start_abs + 1
+        is_continuation = self._looks_like_headerless_continuation(
+            rows=rows,
+            header_candidates=header_candidates,
+            min_row=min_row,
+            fallback_headers=fallback_headers,
+        )
+        if is_continuation and fallback_headers:
+            header_rel = 0
+            header_depth = 0
+            headers = list(fallback_headers)
+            warnings.append("检测到疑似续表块，已复用上一段同宽表头")
+        else:
+            header_start_abs, header_end_abs = self._detect_header_range(
+                header_candidates, default=min_row
+            )
+            header_rel = max(1, header_end_abs - min_row + 1)
+            header_depth = header_end_abs - header_start_abs + 1
 
-        # Step 5: 多层表头合并为单层
-        if header_depth > 1:
-            header_start_rel = max(1, header_start_abs - min_row + 1)
-            self._merge_multi_level_headers(rows, header_rel, start_rel=header_start_rel)
+            # Step 5: 多层表头合并为单层
+            if header_depth > 1:
+                header_start_rel = max(1, header_start_abs - min_row + 1)
+                self._merge_multi_level_headers(rows, header_rel, start_rel=header_start_rel)
+            headers = self._dedupe_headers(rows[header_rel - 1])
 
         # 检测数据区域边界（从底部向上过滤脚注行）
         data_end = self._detect_data_end(rows, header_rel)
 
         row_flags = self.classify_rows(rows, header_row=header_rel, data_end=data_end)
-        headers = self._dedupe_headers(rows[header_rel - 1])
 
         records: list[dict[str, Any]] = []
+        current_context_group: str | None = None
+        detected_context_groups = False
         for rel_idx, values in enumerate(rows, start=1):
             if rel_idx <= header_rel:
+                continue
+            context_label = self._context_group_label(values, headers)
+            if context_label:
+                current_context_group = context_label
+                detected_context_groups = True
+                warnings.append(
+                    f"row {min_row + rel_idx - 1}: 检测到父级/分组标题行 `{context_label}`，"
+                    "已写入后续明细的 _context_group"
+                )
                 continue
             flag = row_flags.get(rel_idx, {})
             if flag.get("warning"):
@@ -144,14 +181,21 @@ class ExcelPreprocessor:
                 header: values[index] if index < len(values) else None
                 for index, header in enumerate(headers)
             }
+            if detected_context_groups or current_context_group is not None:
+                record["_context_group"] = current_context_group
             record["_source_file"] = file_path.name
             record["_source_sheet"] = worksheet.title
             record["_source_row"] = min_row + rel_idx - 1
             records.append(record)
 
+        data_columns = list(headers)
+        if detected_context_groups:
+            for record in records:
+                record.setdefault("_context_group", None)
+            data_columns.append("_context_group")
         dataframe = pd.DataFrame.from_records(
             records,
-            columns=[*headers, "_source_file", "_source_sheet", "_source_row"],
+            columns=[*data_columns, "_source_file", "_source_sheet", "_source_row"],
         )
         table_id = self._safe_table_id(str(table_candidate["table_id"]))
         data_path = normalized_dir / f"{table_id}.parquet"
@@ -164,7 +208,7 @@ class ExcelPreprocessor:
             dataframe.to_excel(data_path, index=False)
         dataframe.head(50).to_excel(preview_path, index=False)
 
-        enum_columns = self._detect_enum_columns(dataframe, headers)
+        enum_columns = self._detect_enum_columns(dataframe, data_columns)
         oversized_cells = self._detect_oversized_cells(dataframe, headers)
         if oversized_cells:
             warnings.append(f"检测到 {len(oversized_cells)} 个超长文本单元格，profile 预览会截断")
@@ -187,6 +231,58 @@ class ExcelPreprocessor:
             warnings=warnings,
         )
 
+    def _context_group_label(self, values: list[Any], headers: list[str]) -> str | None:
+        visible_values = values[: len(headers)]
+        indexed_values = [
+            (index, value)
+            for index, value in enumerate(visible_values)
+            if value not in (None, "")
+            and not self._is_context_ignorable_column(headers[index] if index < len(headers) else "")
+        ]
+        if not indexed_values:
+            return None
+
+        first_index, first_value = indexed_values[0]
+        if not isinstance(first_value, str):
+            return None
+        label = first_value.strip()
+        if len(label) < 2 or self._contains_summary_keyword([label]):
+            return None
+        if any(isinstance(value, (int, float)) for _, value in indexed_values):
+            return None
+
+        normalized_values = {
+            str(value).strip().casefold()
+            for _, value in indexed_values
+            if str(value).strip()
+        }
+        if (
+            len(normalized_values) == 1
+            and len(indexed_values) >= max(3, len(headers) // 2)
+        ):
+            return label
+
+        first_header = headers[0].strip().lower() if headers else ""
+        first_header_looks_like_id = any(
+            token in first_header
+            for token in ("serial", "no", "编号", "序号", "id", "#")
+        )
+        if (
+            len(indexed_values) == 1
+            and first_index == 0
+            and len(headers) >= 3
+            and first_header_looks_like_id
+        ):
+            return label
+        return None
+
+    def _is_context_ignorable_column(self, header: str) -> bool:
+        normalized = str(header or "").strip().lower()
+        return any(
+            token in normalized
+            for token in ("remark", "note", "comment", "备注", "说明")
+        )
+
     def _column_metadata(
         self,
         dataframe: pd.DataFrame,
@@ -202,6 +298,10 @@ class ExcelPreprocessor:
         if value is None:
             raise ValueError(f"Invalid table range: {range_ref}")
         return int(value)
+
+    def _table_candidate_width(self, range_ref: str) -> int:
+        min_col, _, max_col, _ = range_boundaries(range_ref)
+        return int(max_col) - int(min_col) + 1
 
     def _detect_header_range(self, candidates: list[int], default: int) -> tuple[int, int]:
         """Find the start and end rows of a consecutive header block.
@@ -227,6 +327,32 @@ class ExcelPreprocessor:
         if value is None:
             return default
         return int(value)
+
+    def _looks_like_headerless_continuation(
+        self,
+        *,
+        rows: list[list[Any]],
+        header_candidates: list[int],
+        min_row: int,
+        fallback_headers: list[str] | None,
+    ) -> bool:
+        if not rows or not fallback_headers or len(fallback_headers) != len(rows[0]):
+            return False
+        # If the first candidate is the region's first row, keep the normal
+        # header path. Continuations usually have no header at the top, so a
+        # later text-heavy data row may be mistaken for a header candidate.
+        if header_candidates and int(header_candidates[0]) == min_row:
+            return False
+        first_row = rows[0]
+        non_empty = [value for value in first_row if value not in (None, "")]
+        if not non_empty:
+            return False
+        numeric_like = sum(isinstance(value, (int, float)) for value in non_empty)
+        text_like = sum(isinstance(value, str) for value in non_empty)
+        # A continuation's first row often mixes group labels with serial
+        # numbers or measurements. A real header row should not contain data
+        # numerics in this conservative detector.
+        return numeric_like >= 1 and text_like >= 1
 
     def _cell_value(
         self,
@@ -373,9 +499,9 @@ class ExcelPreprocessor:
                 continue
             unique_values = sorted(values.unique().tolist())
             unique_ratio = len(unique_values) / len(values)
-            if (
-                len(unique_values) <= self.enum_max_unique_values
-                and unique_ratio < self.enum_max_unique_ratio
+            is_context_column = str(header).startswith("_context_")
+            if len(unique_values) <= self.enum_max_unique_values and (
+                is_context_column or unique_ratio < self.enum_max_unique_ratio
             ):
                 enum_columns[header] = unique_values
         return enum_columns

@@ -186,6 +186,117 @@ def test_process_writes_to_explicit_output_dir(tmp_path):
     assert output_dir in Path(result.tables[0].parquet_path).parents
 
 
+def test_process_reuses_previous_headers_for_headerless_continuation_block(tmp_path):
+    workbook_path = tmp_path / "continuation.xlsx"
+    workbook = openpyxl.Workbook()
+    ws = workbook.active
+    ws.title = "Sheet1"
+    ws.append(["Division", "Subdivision", "Serial No."])
+    ws.append(["Foundation", "Earthwork", 1])
+    ws.append([None, None, 2])
+    ws.append([None, None, None])
+    ws.append([None, None, None])
+    ws.append([None, None, None])
+    ws.append(["Decoration", "Floor", 1])
+    ws.append([None, None, 2])
+    ws.append([None, "Doors", 1])
+    workbook.save(workbook_path)
+
+    manifest = {
+        "manifest_path": "workbook_manifest.json",
+        "files": [
+            {
+                "path": str(workbook_path),
+                "sheets": [
+                    {
+                        "name": "Sheet1",
+                        "tables": [
+                            {
+                                "table_id": "Sheet1_t1",
+                                "range": "A1:C3",
+                                "header_candidates": [1],
+                            },
+                            {
+                                "table_id": "Sheet1_t2",
+                                "range": "A7:C9",
+                                # Simulates a later text-heavy row being
+                                # mistaken for a header candidate.
+                                "header_candidates": [9],
+                            },
+                        ],
+                    }
+                ],
+            }
+        ],
+    }
+
+    result = ExcelPreprocessor().process(workbook_path, manifest)
+    second = result.tables[1]
+    path = Path(second.parquet_path)
+    dataframe = pd.read_parquet(path) if path.suffix == ".parquet" else pd.read_excel(path)
+
+    assert list(dataframe.columns[:3]) == ["Division", "Subdivision", "Serial No."]
+    assert dataframe.loc[0, "Division"] == "Decoration"
+    assert dataframe.loc[0, "Serial No."] == 1
+    assert any("续表" in warning for warning in second.warnings)
+
+
+def test_process_converts_group_title_rows_to_context_column(tmp_path):
+    workbook_path = tmp_path / "grouped.xlsx"
+    workbook = openpyxl.Workbook()
+    ws = workbook.active
+    ws.title = "Sheet1"
+    ws.append(["Serial No.", "Project Name", "Unit", "Quantity", "Remarks"])
+    ws.append(["First Floor", None, None, None, None])
+    ws.merge_cells("A2:D2")
+    ws.append([1, "Floor Tiles (1000×1000)", "㎡", 72.4, "ok"])
+    ws.append([2, "Kitchen Wall Tiles", "㎡", 60, "ok"])
+    ws.append(["Second Floor", None, None, None, "XXXXX"])
+    ws.append([1, "Floor Tiles (1000×1000)", "㎡", 120, "ok"])
+    workbook.save(workbook_path)
+
+    manifest = {
+        "manifest_path": "workbook_manifest.json",
+        "files": [
+            {
+                "path": str(workbook_path),
+                "sheets": [
+                    {
+                        "name": "Sheet1",
+                        "tables": [
+                            {
+                                "table_id": "Sheet1_t1",
+                                "range": "A1:E6",
+                                "header_candidates": [1],
+                            }
+                        ],
+                    }
+                ],
+            }
+        ],
+    }
+
+    result = ExcelPreprocessor().process(workbook_path, manifest)
+    table = result.tables[0]
+    path = Path(table.parquet_path)
+    dataframe = pd.read_parquet(path) if path.suffix == ".parquet" else pd.read_excel(path)
+
+    assert table.row_count == 3
+    assert "_context_group" in dataframe.columns
+    assert dataframe["Project Name"].tolist() == [
+        "Floor Tiles (1000×1000)",
+        "Kitchen Wall Tiles",
+        "Floor Tiles (1000×1000)",
+    ]
+    assert dataframe["_context_group"].tolist() == [
+        "First Floor",
+        "First Floor",
+        "Second Floor",
+    ]
+    assert table.enum_columns["_context_group"] == ["First Floor", "Second Floor"]
+    assert any("_context_group" in warning for warning in table.warnings)
+
+
 def test_process_records_enum_and_oversized_metadata_without_truncating_data(tmp_path):
     workbook_path = tmp_path / "input.xlsx"
     long_text = "很长的说明" * 50
