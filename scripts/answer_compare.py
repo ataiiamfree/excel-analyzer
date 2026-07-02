@@ -153,11 +153,12 @@ def _auto_result(
     if expected_norm and (expected_norm == observed_norm or expected_norm in observed_norm):
         return _result(True, 1.0, "auto", "normalized text match", expected_text, observed_text)
 
-    expected_numbers = _numbers_from_value(expected_text)
+    expected_number_options = _number_options_from_value(expected_text)
+    expected_numbers = [option[0] for option in expected_number_options]
     observed_numbers = _numbers_from_value(observed_text)
-    if expected_numbers:
-        numbers_matched = _all_numbers_matched(
-            expected_numbers,
+    if expected_number_options:
+        numbers_matched = _all_number_options_matched(
+            expected_number_options,
             observed_numbers,
             abs_tol=abs_tol,
             rel_tol=rel_tol,
@@ -213,10 +214,11 @@ def _numeric_result(
     rel_tol: float,
     mode: str,
 ) -> AnswerComparison:
-    expected_numbers = _numbers_from_value(expected_text)
+    expected_number_options = _number_options_from_value(expected_text)
+    expected_numbers = [option[0] for option in expected_number_options]
     observed_numbers = _numbers_from_value(observed_text)
-    passed = bool(expected_numbers) and _all_numbers_matched(
-        expected_numbers,
+    passed = bool(expected_number_options) and _all_number_options_matched(
+        expected_number_options,
         observed_numbers,
         abs_tol=abs_tol,
         rel_tol=rel_tol,
@@ -270,11 +272,15 @@ def _normalized_text(value: Any) -> str:
 
 
 def _numbers_from_value(value: Any) -> list[float]:
+    return [number for options in _number_options_from_value(value) for number in options]
+
+
+def _number_options_from_value(value: Any) -> list[list[float]]:
     if value is None or isinstance(value, bool):
         return []
     if isinstance(value, (int, float)):
         number = float(value)
-        return [number] if math.isfinite(number) else []
+        return [[number]] if math.isfinite(number) else []
 
     text = _clean_text(value)
     if not text:
@@ -293,11 +299,10 @@ def _numbers_from_value(value: Any) -> list[float]:
     normalized = re.sub(r"(?<=\d),(?=\d{3}(\D|$))", "", normalized)
 
     parenthesized_negative = bool(re.fullmatch(r"\(.*\)", normalized))
-    numbers: list[float] = []
-    for match in re.finditer(r"(?<![A-Za-z])[-+]?\d+(?:\.\d+)?%?(?![A-Za-z])", normalized):
-        raw = match.group()
-        is_percent = raw.endswith("%")
-        raw_number = raw[:-1] if is_percent else raw
+    numbers: list[list[float]] = []
+    for match in re.finditer(r"(?<![A-Za-z])([-+]?\d+(?:\.\d+)?)(\s*%)?(?![A-Za-z])", normalized):
+        raw_number = match.group(1)
+        is_percent = bool(match.group(2))
         try:
             number = float(raw_number)
         except ValueError:
@@ -305,10 +310,36 @@ def _numbers_from_value(value: Any) -> list[float]:
         if parenthesized_negative and number > 0:
             number = -number
         if math.isfinite(number):
-            numbers.append(number)
+            options = [number]
             if is_percent:
-                numbers.append(number / 100)
+                options.append(number / 100)
+            numbers.append(options)
     return numbers
+
+
+def _all_number_options_matched(
+    expected_number_options: list[list[float]],
+    observed_numbers: list[float],
+    *,
+    abs_tol: float,
+    rel_tol: float,
+) -> bool:
+    if len(observed_numbers) < len(expected_number_options):
+        return False
+    used: set[int] = set()
+    for options in expected_number_options:
+        match_index = None
+        for index, actual in enumerate(observed_numbers):
+            if index in used:
+                continue
+            if any(_numbers_close(actual, expected, abs_tol=abs_tol, rel_tol=rel_tol)
+                   for expected in options):
+                match_index = index
+                break
+        if match_index is None:
+            return False
+        used.add(match_index)
+    return True
 
 
 def _all_numbers_matched(
@@ -336,8 +367,25 @@ def _all_numbers_matched(
 
 
 def _numbers_close(actual: float, expected: float, *, abs_tol: float, rel_tol: float) -> bool:
-    tolerance = max(abs_tol, rel_tol * abs(expected))
-    return abs(actual - expected) <= tolerance
+    tolerance = max(abs_tol, rel_tol * abs(expected), _rounding_tolerance(expected))
+    return abs(actual - expected) <= tolerance + 1e-12
+
+
+def _rounding_tolerance(expected: float) -> float:
+    """Allow half of the expected number's last visible decimal place.
+
+    Benchmark answers are often rounded for human readability. If the expected
+    value is `-22.7`, an observed `-22.69` should match; if the expected value
+    is an integer like `125`, no extra rounding tolerance is applied.
+    """
+
+    if not math.isfinite(expected) or expected == math.trunc(expected):
+        return 0.0
+    text = f"{abs(expected):.12f}".rstrip("0").rstrip(".")
+    if "." not in text:
+        return 0.0
+    decimals = len(text.split(".", 1)[1])
+    return 0.6 * (10 ** -decimals)
 
 
 def _meaningful_tokens(value: Any) -> list[str]:

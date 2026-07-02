@@ -7,6 +7,7 @@ dispatch goes through a registry.
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
 
@@ -262,6 +263,11 @@ class Orchestrator:
             "即使复杂数据分析，也优先用 1 个 python 步骤完成。\n"
             "只有当用户明确要求“报告、分析报告、详细分析、汇报材料、长文”等完整写作产物时，"
             "才生成 report_outline。\n"
+            "制定 python instruction 时必须忠实保留用户问题的业务口径："
+            "如果数据概况里已有可直接使用的字段或共享同一指标词的 A/B 配对字段，"
+            "instruction 应要求代码优先使用这些直接字段。"
+            "不要把用户提到但表中未完全同名的指标擅自改写成工作簿没有定义的派生公式；"
+            "只有用户明确给出公式或表格字段明确定义了公式时才这么做。\n"
             "不要在 instruction 中硬编码 normalized 文件的绝对路径；只描述要使用哪张表和哪些字段，"
             "代码生成阶段会根据数据概况里的 tables[].path 读取正式数据文件。\n"
             "如果用户要求导出、保存、输出结果表，计划必须明确要求把用户可见产物写入 output/ 目录。\n"
@@ -466,7 +472,10 @@ class Orchestrator:
             result = await self._execute_step(step, context, workspace, on_reasoning_token)
             check = self.tools.checker.validate(step, result, context, workspace)
 
-            if check.status == "failed" and not result.retries_exhausted:
+            semantic_repair_llm_failures = 0
+            for repair_index in range(self._max_semantic_repair_attempts()):
+                if check.status != "failed" or result.retries_exhausted:
+                    break
                 result = await self._repair_from_check(
                     step,
                     result,
@@ -474,7 +483,13 @@ class Orchestrator:
                     context,
                     workspace,
                     on_reasoning_token,
+                    repair_index=repair_index,
+                    llm_failure_count=semantic_repair_llm_failures,
                 )
+                if self._is_check_repair_llm_failure(result):
+                    semantic_repair_llm_failures += 1
+                else:
+                    semantic_repair_llm_failures = 0
                 check = self.tools.checker.validate(step, result, context, workspace)
 
             if result.failed or check.status == "failed":
@@ -489,7 +504,11 @@ class Orchestrator:
                         script_path=result.script_path,
                     )
                 plan.mark_failed(step.id, result.error or check.to_prompt_text(), check.status)
-                if result.retries_exhausted and hasattr(self.tools, "planner"):
+                if (
+                    result.retries_exhausted
+                    and hasattr(self.tools, "planner")
+                    and not self._is_check_repair_llm_failure(result)
+                ):
                     plan = await self._replan(context, step, result.error or check.to_prompt_text())
                     context.plan = plan
                     workspace.save_json("plan.json", plan.to_dict())
@@ -585,6 +604,16 @@ class Orchestrator:
 
         workspace.write_state(status="completed", current_step=None)
         return TaskResult(report=report, files=self._absolute_output_files(workspace))
+
+    def _max_semantic_repair_attempts(self) -> int:
+        value = getattr(self.config, "max_semantic_repair_attempts", 1)
+        try:
+            return max(0, int(value))
+        except (TypeError, ValueError):
+            return 1
+
+    def _is_check_repair_llm_failure(self, result: StepResult) -> bool:
+        return str(result.error or "").startswith("结果校验修复失败")
 
     async def _execute_step(
         self,
@@ -696,6 +725,8 @@ class Orchestrator:
         context: TaskContext,
         workspace: Any,
         reasoning_callback: TokenCallback | None = None,
+        repair_index: int = 0,
+        llm_failure_count: int = 0,
     ) -> StepResult:
         script_text = workspace.read_text(result.script_path) if result.script_path else ""
         repair_prompt = self.assembler.assemble_repair(
@@ -704,20 +735,34 @@ class Orchestrator:
             failed_code=script_text,
             stderr=result.error,
             check_report=check.to_prompt_text(),
+            stdout=result.stdout,
         )
-        code = self._extract_code_block(
-            await self.llm.call(repair_prompt, reasoning_callback=reasoning_callback)
-        )
+        try:
+            repair_response = await self.llm.call(
+                repair_prompt, reasoning_callback=reasoning_callback
+            )
+        except Exception as exc:
+            logger.warning("结果校验修复 LLM 调用失败: %s", exc)
+            next_failure_count = llm_failure_count + 1
+            await asyncio.sleep(min(2 ** llm_failure_count, 30))
+            return StepResult(
+                stdout=result.stdout,
+                files=result.files,
+                failed=True,
+                error=f"结果校验修复失败: {exc}",
+                retries_exhausted=next_failure_count >= 2,
+                script_path=result.script_path,
+            )
+        code = self._extract_code_block(repair_response)
+        attempt = self.config.max_repair_attempts + 1 + repair_index
         exec_result = self.tools.sandbox.execute(
             code=code,
             workdir=workspace.path,
             step_id=step.id,
-            attempt=self.config.max_repair_attempts + 1,
+            attempt=attempt,
             timeout=self.config.sandbox_timeout,
         )
-        workspace.record_code(
-            step.id, exec_result.script_path, attempt=self.config.max_repair_attempts + 1
-        )
+        workspace.record_code(step.id, exec_result.script_path, attempt=attempt)
         return StepResult(
             stdout=exec_result.stdout,
             files=exec_result.output_files,

@@ -24,6 +24,7 @@ class Profiler:
         visible_columns = [col for col in df.columns if not str(col).startswith("_source_")]
         columns_info = [self._profile_column(df, col) for col in visible_columns]
         grouped, detail = self._group_similar_columns(columns_info)
+        column_families = self._detect_column_families(columns_info)
         sample = self._sample_rows(df, visible_columns)
         return {
             "table_id": table.table_id,
@@ -31,6 +32,7 @@ class Profiler:
             "path": table.parquet_path,
             "shape": {"rows": len(df), "cols": len(visible_columns)},
             "columns_grouped": grouped,
+            "column_families": column_families,
             "columns_detail": detail,
             "enum_columns": table.enum_columns,
             "oversized_cells": table.oversized_cells,
@@ -111,6 +113,58 @@ class Profiler:
         ):
             return unique_values
         return []
+
+    def _detect_column_families(
+        self,
+        columns: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """Detect repeated logical columns created by duplicate Excel headers.
+
+        pandas/openpyxl-style header de-duplication often turns repeated header
+        cells into `name`, `name_2`, `name_3`. These are usually not unrelated
+        fields; they are sibling observations under the same visual header
+        (attempts, periods, regions, material variants, etc.). Exposing this as
+        metadata lets the code-generation step inspect the whole family instead
+        of accidentally taking the first column.
+        """
+
+        by_name = {str(col.get("name")): col for col in columns if col.get("name")}
+        families: list[dict[str, Any]] = []
+        consumed: set[str] = set()
+
+        for name in by_name:
+            if name in consumed or self._dedupe_suffix(name) is not None:
+                continue
+            siblings = [name]
+            index = 2
+            while f"{name}_{index}" in by_name:
+                siblings.append(f"{name}_{index}")
+                index += 1
+            if len(siblings) < 2:
+                continue
+
+            consumed.update(siblings)
+            dtype_counts: dict[str, int] = {}
+            for sibling in siblings:
+                dtype = str(by_name[sibling].get("dtype", "?"))
+                dtype_counts[dtype] = dtype_counts.get(dtype, 0) + 1
+            dominant_dtype = max(dtype_counts, key=dtype_counts.get)
+            families.append(
+                {
+                    "base": name,
+                    "kind": "deduped_repeated_header",
+                    "columns": siblings,
+                    "count": len(siblings),
+                    "dtype": dominant_dtype,
+                }
+            )
+        return families
+
+    def _dedupe_suffix(self, name: str) -> int | None:
+        match = re.match(r"^.+_([2-9]\d*)$", name)
+        if not match:
+            return None
+        return int(match.group(1))
 
     def _group_similar_columns(
         self, columns: list[dict[str, Any]]
