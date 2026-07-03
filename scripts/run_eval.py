@@ -1314,6 +1314,8 @@ async def run_case(case: EvalCase, run_dir: Path, args: argparse.Namespace) -> d
         config.sandbox_timeout = args.sandbox_timeout
     if args.max_repair_attempts is not None:
         config.max_repair_attempts = args.max_repair_attempts
+    if args.max_semantic_repair_attempts is not None:
+        config.max_semantic_repair_attempts = args.max_semantic_repair_attempts
 
     if not config.llm_api_key:
         raise RuntimeError("DEEPSEEK_API_KEY is empty. Set it in .env or the environment before running evals.")
@@ -1648,6 +1650,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--sandbox-timeout", type=int, help="Override sandbox timeout seconds.")
     parser.add_argument("--max-repair-attempts", type=int, help="Override max repair attempts.")
+    parser.add_argument(
+        "--max-semantic-repair-attempts",
+        type=int,
+        help="Override result-check repair attempts.",
+    )
     parser.add_argument("--fail-fast", action="store_true", help="Stop after the first failing case.")
     parser.add_argument("--retries", type=int, default=2, help="Max attempts per case on transient (network) errors.")
     parser.add_argument("--log-level", default=os.getenv("LOG_LEVEL", "INFO"), help="Python logging level.")

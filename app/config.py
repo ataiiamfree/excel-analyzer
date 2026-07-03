@@ -39,6 +39,9 @@ class Config:
     sandbox_memory_mb: int = field(default_factory=lambda: int(os.getenv("SANDBOX_MEMORY_MB", "1024")))
     max_stdout_chars: int = field(default_factory=lambda: int(os.getenv("MAX_STDOUT_CHARS", "20000")))
     max_repair_attempts: int = field(default_factory=lambda: int(os.getenv("MAX_REPAIR_ATTEMPTS", "2")))
+    max_semantic_repair_attempts: int = field(
+        default_factory=lambda: int(os.getenv("MAX_SEMANTIC_REPAIR_ATTEMPTS", "1"))
+    )
     max_file_size_mb: int = field(default_factory=lambda: int(os.getenv("MAX_FILE_SIZE_MB", "100")))
     max_concurrent_tasks: int = field(default_factory=lambda: int(os.getenv("MAX_CONCURRENT_TASKS", "1")))
 

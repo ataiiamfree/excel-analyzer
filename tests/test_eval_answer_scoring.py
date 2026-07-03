@@ -30,6 +30,46 @@ def test_compare_answers_matches_numeric_with_unit_tolerance():
     assert result.expected_numbers == [74.434541420118]
 
 
+def test_compare_answers_allows_expected_precision_rounding():
+    result = compare_answers(
+        "Q1 -22.7 %, Q2 -67.7 %",
+        "Final Answer: Q1 -22.69%, Q2 -67.65%",
+        mode="auto",
+    )
+
+    assert result.passed
+
+
+def test_compare_answers_matches_expected_percent_to_observed_ratio():
+    result = compare_answers(
+        "Q1 -22.7 %, Q2 -67.7 %",
+        "Final Answer: Q1 -0.226859, Q2 -0.676480",
+        mode="auto",
+    )
+
+    assert result.passed
+
+
+def test_compare_answers_matches_percentages_to_ratio_with_context_year():
+    result = compare_answers(
+        "No quarter increased; Q1 -22.7 %, Q2 -67.7 %, Q3 -143.7 %, Q4 -1001.2 %.",
+        (
+            "In 2020, quarters with increased compounded MoM growth rate: None. "
+            "All quarterly compounded rates: Q1: -0.226859, Q2: -0.676480, "
+            "Q3: -1.436666, Q4: -10.012569."
+        ),
+        mode="auto",
+    )
+
+    assert result.passed
+
+
+def test_compare_answers_keeps_integer_answers_strict():
+    result = compare_answers("125", "Final Answer: 115", mode="auto")
+
+    assert not result.passed
+
+
 def test_compare_answers_requires_text_when_expected_has_meaningful_tokens():
     result = compare_answers("163802, 6987, much higher", "163802 and 6987", mode="auto")
 
