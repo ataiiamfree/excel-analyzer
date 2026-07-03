@@ -697,7 +697,11 @@ class Orchestrator:
                 context, step, code, exec_result.stderr
             )
             code = self._extract_code_block(
-                await self.llm.call(repair_prompt, reasoning_callback=reasoning_callback)
+                await self.llm.call(
+                    repair_prompt,
+                    reasoning_callback=reasoning_callback,
+                    thinking=False,
+                )
             )
             exec_result = self.tools.sandbox.execute(
                 code=code,
@@ -739,7 +743,9 @@ class Orchestrator:
         )
         try:
             repair_response = await self.llm.call(
-                repair_prompt, reasoning_callback=reasoning_callback
+                repair_prompt,
+                reasoning_callback=reasoning_callback,
+                thinking=False,
             )
         except Exception as exc:
             logger.warning("结果校验修复 LLM 调用失败: %s", exc)

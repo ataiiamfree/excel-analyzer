@@ -243,6 +243,98 @@ def test_semantic_repair_uses_own_budget():
     assert plan.get_step("s1").status == "failed"
 
 
+def test_execution_repair_disables_thinking():
+    class RecordingLLM:
+        def __init__(self):
+            self.calls = []
+
+        async def call(self, prompt, **kwargs):
+            self.calls.append(kwargs)
+            return "print('ok')"
+
+    class FailingThenPassingSandbox:
+        def __init__(self):
+            self.calls = 0
+
+        def execute(self, **kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                return SimpleNamespace(
+                    success=False,
+                    stdout="",
+                    stderr="syntax error",
+                    output_files=[],
+                    script_path="scripts/s1_attempt_0.py",
+                )
+            return SimpleNamespace(
+                success=True,
+                stdout="Final Answer: ok",
+                stderr="",
+                output_files=[],
+                script_path="scripts/s1_attempt_1.py",
+            )
+
+    step = Step(id="s1", tool="python", description="repair", instruction="repair")
+    context = TaskContext("t1", "q", {}, {}, plan=ExecutionPlan([step]))
+    workspace = FakeWorkspace()
+    llm = RecordingLLM()
+    tools = SimpleNamespace(sandbox=FailingThenPassingSandbox(), checker=FakeChecker())
+    orchestrator = Orchestrator(llm_client=llm, tools=tools, config=_make_config())
+
+    result = asyncio.run(orchestrator._execute_python(step, context, workspace))
+
+    assert result.failed is False
+    assert len(llm.calls) == 2
+    assert llm.calls[0].get("thinking") is None
+    assert llm.calls[1].get("thinking") is False
+
+
+def test_check_repair_disables_thinking():
+    class RecordingLLM:
+        def __init__(self):
+            self.calls = []
+
+        async def call(self, prompt, **kwargs):
+            self.calls.append(kwargs)
+            return "print('Final Answer: fixed')"
+
+    class PassingSandbox:
+        def execute(self, **kwargs):
+            return SimpleNamespace(
+                success=True,
+                stdout="Final Answer: fixed",
+                stderr="",
+                output_files=[],
+                script_path="scripts/s1_attempt_2.py",
+            )
+
+    step = Step(id="s1", tool="python", description="repair", instruction="repair")
+    context = TaskContext("t1", "q", {}, {}, plan=ExecutionPlan([step]))
+    workspace = FakeWorkspace()
+    check = CheckResult(
+        step_id=step.id,
+        status="failed",
+        checks=[CheckItem("answer", "failed", "wrong answer")],
+    )
+    llm = RecordingLLM()
+    tools = SimpleNamespace(sandbox=PassingSandbox(), checker=FakeChecker())
+    orchestrator = Orchestrator(llm_client=llm, tools=tools, config=_make_config())
+
+    result = asyncio.run(
+        orchestrator._repair_from_check(
+            step,
+            StepResult(stdout="bad", files=[], script_path="scripts/s1_attempt_0.py"),
+            check,
+            context,
+            workspace,
+        )
+    )
+
+    assert result.failed is False
+    assert len(llm.calls) == 1
+    assert llm.calls[0].get("thinking") is False
+
+
 def test_orchestrator_handles_check_repair_llm_failure(monkeypatch):
     async def fake_sleep(delay):
         return None
