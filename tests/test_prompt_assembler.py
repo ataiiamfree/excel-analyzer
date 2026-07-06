@@ -359,6 +359,83 @@ def test_profile_prompt_renders_header_path_when_multi_level():
     assert "不要只匹配叶列名" in prompt
 
 
+def test_profile_prompt_adds_scale_indicator_hint_when_header_carries_unit():
+    step = Step(id="s1", tool="python", description="q", instruction="q")
+    context = TaskContext(
+        task_id="t1",
+        user_query="How many charities have fundraising over 10 million?",
+        workbook_manifest={},
+        data_profile={
+            "tables": [
+                {
+                    "table_id": "Sheet1_t1",
+                    "source": "Sheet1!A1:E5",
+                    "path": "normalized/Sheet1_t1.parquet",
+                    "shape": {"rows": 4, "cols": 5},
+                    "columns_detail": [
+                        {
+                            "name": "Charity",
+                            "dtype": "object",
+                            "header_path": ["Charity"],
+                        },
+                        {
+                            "name": "Total Fundraising_£(000)_2012/13",
+                            "dtype": "float64",
+                            "header_path": [
+                                "Total Fundraising",
+                                "£(000)",
+                                "2012/13",
+                            ],
+                        },
+                    ],
+                }
+            ]
+        },
+        plan=ExecutionPlan([step]),
+    )
+
+    prompt = PromptAssembler().assemble(context, step)
+
+    assert "sample_rows 里的实际数值量级" in prompt
+    assert "重复缩放" in prompt
+
+
+def test_profile_prompt_omits_scale_hint_for_flat_headers_without_units():
+    step = Step(id="s1", tool="python", description="q", instruction="q")
+    context = TaskContext(
+        task_id="t1",
+        user_query="sum amounts",
+        workbook_manifest={},
+        data_profile={
+            "tables": [
+                {
+                    "table_id": "Sheet1_t1",
+                    "source": "Sheet1!A1:B3",
+                    "path": "normalized/Sheet1_t1.parquet",
+                    "shape": {"rows": 2, "cols": 2},
+                    "columns_detail": [
+                        {
+                            "name": "Name",
+                            "dtype": "object",
+                            "header_path": ["Name"],
+                        },
+                        {
+                            "name": "Amount",
+                            "dtype": "int64",
+                            "header_path": ["Amount"],
+                        },
+                    ],
+                }
+            ]
+        },
+        plan=ExecutionPlan([step]),
+    )
+
+    prompt = PromptAssembler().assemble(context, step)
+
+    assert "sample_rows 里的实际数值量级" not in prompt
+
+
 def test_profile_prompt_omits_header_path_hint_for_flat_tables():
     step = Step(id="s1", tool="python", description="查询", instruction="求和")
     context = TaskContext(

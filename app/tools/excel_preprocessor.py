@@ -544,6 +544,11 @@ class ExcelPreprocessor:
         直接修改 rows 中 header_row-1 位置的行（rows 是 0-indexed list，header_row 是 1-based）。
         start_rel: 表头起始行（1-based），默认为 1。只合并 start_rel..header_row 范围内的行。
 
+        For sparse non-leaf header rows (e.g. `Landings into` at col B only,
+        implicitly spanning B..K until the next label at col L), forward-fill
+        each non-empty cell rightward until the next non-empty cell. The leaf
+        (bottom) header row is left as-is so per-column labels stay specific.
+
         Returns per-column header lineage lists (top-level group → leaf column,
         empty levels dropped, adjacent duplicates dedupped). Callers use this to
         keep track of the original hierarchy after the flat merge destroys it.
@@ -551,6 +556,21 @@ class ExcelPreprocessor:
         if header_row <= 1:
             return []
         num_cols = len(rows[0]) if rows else 0
+        leaf_rel = header_row - 1
+        header_depth = header_row - start_rel + 1
+        # The row immediately above the leaf is frequently a per-cell
+        # annotation row (e.g. `%` markers on change columns, `Tonnes` on
+        # tonnage columns). Forward-filling it contaminates non-annotated
+        # columns with those annotations. Skip it when there are ≥3 header
+        # rows; for shallower blocks the "penultimate" IS the top group row
+        # and must be filled.
+        skip_penultimate = header_depth >= 3
+        for row_rel in range(start_rel - 1, leaf_rel):
+            if skip_penultimate and row_rel == leaf_rel - 1:
+                continue
+            rows[row_rel] = self._forward_fill_sparse_header_row(
+                rows[row_rel], num_cols
+            )
         merged_headers = []
         header_paths: list[list[str]] = []
         for col_idx in range(num_cols):
@@ -568,6 +588,36 @@ class ExcelPreprocessor:
             header_paths.append(seen)
         rows[header_row - 1] = merged_headers
         return header_paths
+
+    def _forward_fill_sparse_header_row(
+        self, row: list[Any], num_cols: int
+    ) -> list[Any]:
+        """Fill each non-empty label rightward until the next non-empty cell.
+
+        Only applied to visibly sparse rows (< 60% density) so dense leaf rows
+        or annotation rows keep their per-column specificity. Cells to the
+        LEFT of the first non-empty value stay empty — some tables leave the
+        row-label column blank at the top level.
+        """
+        effective_row = list(row)
+        while len(effective_row) < num_cols:
+            effective_row.append(None)
+        filled_count = sum(
+            1
+            for value in effective_row[:num_cols]
+            if value not in (None, "") and str(value).strip()
+        )
+        if num_cols == 0 or filled_count / num_cols >= 0.6:
+            return effective_row
+        result = list(effective_row)
+        last_value: Any = None
+        for i in range(num_cols):
+            value = result[i]
+            if value not in (None, "") and str(value).strip():
+                last_value = value
+            elif last_value is not None:
+                result[i] = last_value
+        return result
 
     def _detect_data_end(self, rows: list[list[Any]], header_row: int) -> int:
         """从底部向上扫描，过滤脚注行，返回最后一个有效数据行的 1-based 索引。"""

@@ -335,6 +335,7 @@ class PromptAssembler:
         has_column_families = self._has_column_families(tables)
         has_context_columns = self._has_context_columns(tables)
         has_multi_level_headers = self._has_multi_level_headers(tables)
+        has_scale_hint = self._has_scale_indicator_in_headers(tables)
         if (
             not has_column_families
             and not has_context_columns
@@ -359,6 +360,12 @@ class PromptAssembler:
                     "不要只匹配叶列名，也不要把上层组当作行值去筛选。",
                 ]
             )
+            if has_scale_hint:
+                lines.append(
+                    "- header_path 里出现 `(000)`、`(千)`、`(millions)`、`%` 等单位/比例标记时，"
+                    "**必须先看 sample_rows 里的实际数值量级再判断是否需要缩放**——"
+                    "很多工作簿标注了单位但数据仍按原量级存放；按标签重复缩放会导致阈值/比较错误。"
+                )
         if has_column_families:
             lines.extend(
                 [
@@ -422,6 +429,26 @@ class PromptAssembler:
                 path = column.get("header_path")
                 if isinstance(path, list) and len(path) > 1:
                     return True
+        return False
+
+    _SCALE_TOKENS = (
+        "(000)", "(0000)", "(千)", "(万)", "(百万)", "(亿)",
+        "(thousand", "(million", "(billion",
+        "%", "‰",
+    )
+
+    def _has_scale_indicator_in_headers(self, tables: list[dict[str, Any]]) -> bool:
+        for table in tables:
+            for column in table.get("columns_detail") or []:
+                if not isinstance(column, dict):
+                    continue
+                path = column.get("header_path") or []
+                if not isinstance(path, list):
+                    continue
+                for level in path:
+                    normalized = str(level).lower()
+                    if any(token in normalized for token in self._SCALE_TOKENS):
+                        return True
         return False
 
     def _has_rate_columns(self, tables: list[dict[str, Any]]) -> bool:

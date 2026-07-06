@@ -539,6 +539,125 @@ def test_process_preserves_header_lineage_for_region_year_columns(tmp_path):
     ]
 
 
+def test_forward_fill_sparse_header_row_spans_gaps():
+    preprocessor = ExcelPreprocessor()
+    row = [None, "Landings into", None, None, None, "Total landings", None, None]
+
+    filled = preprocessor._forward_fill_sparse_header_row(row, num_cols=8)
+
+    assert filled == [
+        None,
+        "Landings into",
+        "Landings into",
+        "Landings into",
+        "Landings into",
+        "Total landings",
+        "Total landings",
+        "Total landings",
+    ]
+
+
+def test_forward_fill_leaves_dense_rows_untouched():
+    preprocessor = ExcelPreprocessor()
+    row = ["A", "B", "C", "D", "E"]
+
+    filled = preprocessor._forward_fill_sparse_header_row(row, num_cols=5)
+
+    assert filled == ["A", "B", "C", "D", "E"]
+
+
+def test_merge_multi_level_headers_skips_penultimate_annotation_row():
+    """4-row header: parent → region → %-marker annotation → leaf year.
+
+    The %-marker row is per-cell annotation, not spanning. Forward-fill
+    would contaminate non-% columns; the merger should leave that row alone.
+    """
+
+    preprocessor = ExcelPreprocessor()
+    rows = [
+        [None, "Landings into", None, None, "Total landings", None, None],
+        [None, "Scotland", None, None, "by UK vessels", None, None],
+        [None, None, None, "%", None, None, "%"],
+        [None, 2022, 2023, "change", 2022, 2023, "change"],
+        [None, 100, 110, -5.5, 200, 210, -3.2],
+    ]
+
+    paths = preprocessor._merge_multi_level_headers(rows, header_row=4)
+
+    # Scotland's 2022 and 2023 stay clean (no % contamination)
+    assert paths[1] == ["Landings into", "Scotland", "2022"]
+    assert paths[2] == ["Landings into", "Scotland", "2023"]
+    # Scotland's change column correctly carries the % annotation
+    assert paths[3] == ["Landings into", "Scotland", "%", "change"]
+    # by UK vessels' 2022/2023 also clean
+    assert paths[4] == ["Total landings", "by UK vessels", "2022"]
+    assert paths[5] == ["Total landings", "by UK vessels", "2023"]
+
+
+def test_ingest_then_process_preserves_sparse_multi_level_lineage_end_to_end(tmp_path):
+    """SheetBench 2292 shape: no merged cells, sparse group cells.
+
+    `Landings into` sits alone at col B expected to span cols B-D; then
+    `Scotland`/`England` at cols B and E expected to span 3 cols each.
+    Without ingestor sparse-row extension + preprocessor forward-fill, the
+    lineage never reaches the year columns and the model can't distinguish
+    Scotland/2023 from England/2023.
+    """
+
+    from app.tools.workbook_ingestor import WorkbookIngestor
+
+    workbook_path = tmp_path / "sheetbench_2292_shape.xlsx"
+    workbook = openpyxl.Workbook()
+    ws = workbook.active
+    ws.title = "Sheet1"
+
+    # Structure: parent group row (sparse), region row (sparse), annotation
+    # row (very sparse), leaf year row (dense). Regions Scotland/England each
+    # span 2 leaf year columns; UK carries a `%` annotation column.
+    ws.append([None, "Landings into", None, None, None, "Total landings", None])
+    ws.append([None, "Scotland", None, "England", None, "UK", None])
+    ws.append([None, None, None, None, None, "%", None])
+    ws.append(["Stock", 2022, 2023, 2022, 2023, "quota", "change"])
+    ws.append(["NS Herring", 100, 110, 200, 210, 300, -3.2])
+    ws.append(["WC Mackerel", 300, 320, 400, 420, 500, 5.0])
+    workbook.save(workbook_path)
+
+    manifest = WorkbookIngestor().scan(workbook_path)
+    result = ExcelPreprocessor().process(workbook_path, manifest)
+    table = result.tables[0]
+
+    # Region + year lineage is correctly assembled for tonnage columns
+    assert table.header_paths["Landings into_Scotland_2022"] == [
+        "Landings into",
+        "Scotland",
+        "2022",
+    ]
+    assert table.header_paths["Landings into_Scotland_2023"] == [
+        "Landings into",
+        "Scotland",
+        "2023",
+    ]
+    assert table.header_paths["Landings into_England_2022"] == [
+        "Landings into",
+        "England",
+        "2022",
+    ]
+    assert table.header_paths["Landings into_England_2023"] == [
+        "Landings into",
+        "England",
+        "2023",
+    ]
+    # Annotation row's `%` only reaches the column it was actually placed on
+    # (UK quota column). Non-annotated year columns stay clean.
+    assert table.header_paths["Total landings_UK_%_quota"] == [
+        "Total landings",
+        "UK",
+        "%",
+        "quota",
+    ]
+    assert "%" not in table.header_paths["Landings into_England_2023"]
+
+
 def test_ingest_then_process_preserves_multi_level_lineage_end_to_end(tmp_path):
     """SheetBench 118 shape driven from ingestor, not a hand-crafted manifest.
 
