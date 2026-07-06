@@ -181,18 +181,31 @@ class WorkbookIngestor:
 
         Stops scanning after the first non-candidate row following a candidate,
         so data rows with text content don't get mistakenly included.
+
+        Density is computed against **merge-expanded** row values: cells inside
+        a merged range use the range's top-left value. Without this, parent
+        group rows like `Total Fundraising` merged across 5 columns look sparse
+        (only column B has the value) and get rejected, which erases the whole
+        upper level of a multi-level header.
         """
         min_row, min_col, max_row, max_col = bounds
         candidates: list[int] = []
         scan_end = min(max_row, min_row + 19)
         width = max_col - min_col + 1
+        merged_map = self._build_merged_value_map(
+            worksheet, min_row, scan_end, min_col, max_col
+        )
         found_first = False
         for row_idx in range(min_row, scan_end + 1):
-            values = [
+            raw_values = [
                 worksheet.cell(row_idx, col_idx).value
                 for col_idx in range(min_col, max_col + 1)
             ]
-            non_empty = [value for value in values if value not in (None, "")]
+            effective_values = [
+                merged_map.get((row_idx, col_idx), raw_values[col_idx - min_col])
+                for col_idx in range(min_col, max_col + 1)
+            ]
+            non_empty = [value for value in effective_values if value not in (None, "")]
             if not non_empty:
                 if found_first:
                     break
@@ -201,10 +214,23 @@ class WorkbookIngestor:
             numeric_count = sum(isinstance(v, (int, float)) for v in non_empty)
             date_count = sum(isinstance(v, (datetime.date, datetime.datetime)) for v in non_empty)
             data_value_count = numeric_count + date_count
-            is_header_like = (
+            unique_texts = {
+                str(value).strip()
+                for value in non_empty
+                if isinstance(value, str) and str(value).strip()
+            }
+            base_header_like = (
                 len(non_empty) / width >= 0.4
                 and text_count / len(non_empty) >= 0.6
                 and data_value_count == 0  # Headers don't contain numbers or dates
+            )
+            # A single-value row on its own is almost always a report title
+            # (e.g. "Q3 results" merged across every column). We only accept
+            # unique=1 rows when they extend an already-detected header block,
+            # e.g. a `£(000)` unit row sandwiched between the parent group row
+            # and the leaf year row.
+            is_header_like = base_header_like and (
+                len(unique_texts) >= 2 or found_first
             )
             if is_header_like:
                 candidates.append(row_idx)
@@ -213,3 +239,35 @@ class WorkbookIngestor:
                 # First non-header row after header block → stop
                 break
         return candidates[:3] or [min_row]
+
+    def _build_merged_value_map(
+        self,
+        worksheet: Any,
+        min_row: int,
+        max_row: int,
+        min_col: int,
+        max_col: int,
+    ) -> dict[tuple[int, int], Any]:
+        """Return {(row, col): value} for cells inside merged ranges in scan area.
+
+        Excel merged ranges store the value only at the top-left cell; treating
+        every covered cell as if it held that value lets header detection see
+        the true logical density of a parent-group row.
+        """
+        mapping: dict[tuple[int, int], Any] = {}
+        for merged_range in worksheet.merged_cells.ranges:
+            r_min = merged_range.min_row
+            r_max = merged_range.max_row
+            c_min = merged_range.min_col
+            c_max = merged_range.max_col
+            if r_max < min_row or r_min > max_row:
+                continue
+            if c_max < min_col or c_min > max_col:
+                continue
+            top_left_value = worksheet.cell(r_min, c_min).value
+            if top_left_value in (None, ""):
+                continue
+            for r in range(max(r_min, min_row), min(r_max, max_row) + 1):
+                for c in range(max(c_min, min_col), min(c_max, max_col) + 1):
+                    mapping[(r, c)] = top_left_value
+        return mapping

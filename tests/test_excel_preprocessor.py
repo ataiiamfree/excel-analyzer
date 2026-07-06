@@ -539,6 +539,55 @@ def test_process_preserves_header_lineage_for_region_year_columns(tmp_path):
     ]
 
 
+def test_ingest_then_process_preserves_multi_level_lineage_end_to_end(tmp_path):
+    """SheetBench 118 shape driven from ingestor, not a hand-crafted manifest.
+
+    Guards against the failure mode where our preprocessor plumbing works but
+    the ingestor's header detection only returns the leaf row, leaving the
+    lineage map single-level.
+    """
+
+    from app.tools.workbook_ingestor import WorkbookIngestor
+
+    workbook_path = tmp_path / "sheetbench_118_shape.xlsx"
+    workbook = openpyxl.Workbook()
+    ws = workbook.active
+    ws.title = "Sheet1"
+
+    ws.append([None, "Total Fundraising", None, None, "Grant", None, None])
+    ws.merge_cells("B1:D1")
+    ws.merge_cells("E1:G1")
+    ws.append([None, "£(000)", None, None, "£(000)", None, None])
+    ws.merge_cells("B2:D2")
+    ws.merge_cells("E2:G2")
+    ws.append([
+        "Charity",
+        "2008/09", "2009/10", "2010/11",
+        "2008/09", "2009/10", "2010/11",
+    ])
+    ws.append(["British Museum", 100, 110, 120, 10, 12, 14])
+    ws.append(["Oxfam", 80, 90, 100, 5, 6, 7])
+    workbook.save(workbook_path)
+
+    manifest = WorkbookIngestor().scan(workbook_path)
+    result = ExcelPreprocessor().process(workbook_path, manifest)
+    table = result.tables[0]
+
+    fund_col = "Total Fundraising_£(000)_2008/09"
+    grant_col = "Grant_£(000)_2008/09"
+    assert fund_col in table.header_paths
+    assert grant_col in table.header_paths
+    assert table.header_paths[fund_col] == [
+        "Total Fundraising",
+        "£(000)",
+        "2008/09",
+    ]
+    assert table.header_paths[grant_col] == ["Grant", "£(000)", "2008/09"]
+    # And the metadata surfaces it downstream
+    fund_meta = next(c for c in table.columns if c["name"] == fund_col)
+    assert fund_meta["header_path"] == ["Total Fundraising", "£(000)", "2008/09"]
+
+
 def test_process_populates_trivial_header_path_for_single_level_tables(tmp_path):
     """Single-level tables also get header_path, keyed to the column name."""
 
