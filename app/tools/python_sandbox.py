@@ -97,7 +97,7 @@ class PythonSandbox:
 
         exec_result = ExecResult(
             success=result.returncode == 0,
-            stdout=result.stdout[: self.max_stdout_chars],
+            stdout=self._truncate_stdout(result.stdout),
             stderr=result.stderr[-self.max_stdout_chars :],
             output_files=self._list_output_files(workdir),
             script_path=str(script_path),
@@ -109,6 +109,31 @@ class PythonSandbox:
             logger.warning("沙箱执行失败 (returncode=%d), stderr=%s",
                            result.returncode, exec_result.stderr[:300])
         return exec_result
+
+    def _truncate_stdout(self, stdout: str) -> str:
+        if len(stdout) <= self.max_stdout_chars:
+            return stdout
+        if self.max_stdout_chars <= 0:
+            return ""
+
+        marker = "\n... [stdout truncated] ...\n"
+        available = self.max_stdout_chars - len(marker)
+        if available <= 0:
+            return stdout[-self.max_stdout_chars :]
+
+        head_chars = available // 2
+        tail_chars = available - head_chars
+        omitted = len(stdout) - head_chars - tail_chars
+        marker = f"\n... [stdout truncated: omitted {omitted} chars] ...\n"
+        available = self.max_stdout_chars - len(marker)
+        if available <= 0:
+            return stdout[-self.max_stdout_chars :]
+
+        head_chars = available // 2
+        tail_chars = available - head_chars
+        omitted = len(stdout) - head_chars - tail_chars
+        marker = f"\n... [stdout truncated: omitted {omitted} chars] ...\n"
+        return stdout[:head_chars] + marker + stdout[-tail_chars:]
 
     def _static_check(self, code: str) -> None:
         # 1. 字符串片段快检
