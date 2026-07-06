@@ -58,6 +58,26 @@ def test_execute_safe_script(tmp_path):
     assert "hello" in result.stdout
 
 
+def test_execute_preserves_stdout_tail_when_truncated(tmp_path):
+    sandbox = PythonSandbox(timeout=10, max_stdout_chars=120)
+    result = sandbox.execute(
+        code=(
+            "print('start-marker')\n"
+            "print('x' * 500)\n"
+            "print('Final Answer: 42')\n"
+        ),
+        workdir=tmp_path,
+        step_id="s1",
+        attempt=0,
+    )
+
+    assert result.success is True
+    assert len(result.stdout) <= 120
+    assert "start-marker" in result.stdout
+    assert "stdout truncated" in result.stdout
+    assert "Final Answer: 42" in result.stdout
+
+
 def test_execute_with_relative_workdir_uses_absolute_script_path(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     sandbox = PythonSandbox(timeout=10)
