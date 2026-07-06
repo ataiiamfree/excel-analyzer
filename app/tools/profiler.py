@@ -22,7 +22,9 @@ class Profiler:
     def _profile_table(self, table: NormalizedTable) -> dict[str, Any]:
         df = self._read_table(table)
         visible_columns = [col for col in df.columns if not str(col).startswith("_source_")]
-        columns_info = [self._profile_column(df, col) for col in visible_columns]
+        columns_info = [
+            self._profile_column(df, col, table.header_paths) for col in visible_columns
+        ]
         grouped, detail = self._group_similar_columns(columns_info)
         column_families = self._detect_column_families(columns_info)
         sample = self._sample_rows(df, visible_columns)
@@ -46,12 +48,19 @@ class Profiler:
             return pd.read_parquet(path)
         return pd.read_excel(path)
 
-    def _profile_column(self, df: pd.DataFrame, col: str) -> dict[str, Any]:
+    def _profile_column(
+        self,
+        df: pd.DataFrame,
+        col: str,
+        header_paths: dict[str, list[str]] | None = None,
+    ) -> dict[str, Any]:
         series = df[col]
+        path = (header_paths or {}).get(col) or [col]
         info: dict[str, Any] = {
             "name": col,
             "dtype": str(series.dtype),
             "null_pct": round(float(series.isna().mean()), 3),
+            "header_path": list(path),
         }
         if pd.api.types.is_numeric_dtype(series):
             non_null = series.dropna()
@@ -172,6 +181,13 @@ class Profiler:
         groups: dict[str, list[dict[str, Any]]] = {}
         ungrouped = []
         for col in columns:
+            path = col.get("header_path") or []
+            # Columns with multi-level lineage carry meaningful group/parent
+            # info; collapsing them into a `pattern(4列)` summary throws that
+            # away. Keep them individually so the lineage stays visible.
+            if isinstance(path, list) and len(path) > 1:
+                ungrouped.append(col)
+                continue
             pattern = re.sub(r"\d+", "{N}", col["name"])
             if pattern != col["name"]:
                 groups.setdefault(pattern, []).append(col)

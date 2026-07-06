@@ -29,6 +29,9 @@ class NormalizedTable:
     enum_columns: dict[str, list[str]] = field(default_factory=dict)
     oversized_cells: list[dict[str, Any]] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    # Map final column name → header lineage from top-level group to leaf column.
+    # Always populated: single-level columns have a single-element list [name].
+    header_paths: dict[str, list[str]] = field(default_factory=dict)
 
 
 @dataclass
@@ -135,10 +138,12 @@ class ExcelPreprocessor:
             min_row=min_row,
             fallback_headers=fallback_headers,
         )
+        raw_header_paths: list[list[str]] = []
         if is_continuation and fallback_headers:
             header_rel = 0
             header_depth = 0
             headers = list(fallback_headers)
+            raw_header_paths = [[str(name)] for name in headers]
             warnings.append("检测到疑似续表块，已复用上一段同宽表头")
         else:
             header_start_abs, header_end_abs = self._detect_header_range(
@@ -150,7 +155,14 @@ class ExcelPreprocessor:
             # Step 5: 多层表头合并为单层
             if header_depth > 1:
                 header_start_rel = max(1, header_start_abs - min_row + 1)
-                self._merge_multi_level_headers(rows, header_rel, start_rel=header_start_rel)
+                raw_header_paths = self._merge_multi_level_headers(
+                    rows, header_rel, start_rel=header_start_rel
+                )
+            else:
+                raw_header_paths = [
+                    [str(value).strip()] if value not in (None, "") else []
+                    for value in rows[header_rel - 1]
+                ]
             headers = self._dedupe_headers(rows[header_rel - 1])
 
         # 检测数据区域边界（从底部向上过滤脚注行）
@@ -218,8 +230,14 @@ class ExcelPreprocessor:
         if oversized_cells:
             warnings.append(f"检测到 {len(oversized_cells)} 个超长文本单元格，profile 预览会截断")
 
+        header_paths = self._build_header_paths(
+            deduped_headers=headers,
+            raw_paths=raw_header_paths,
+            dataframe_columns=[str(col) for col in dataframe.columns],
+        )
+
         columns = [
-            self._column_metadata(dataframe, str(col), enum_columns)
+            self._column_metadata(dataframe, str(col), enum_columns, header_paths)
             for col in dataframe.columns
         ]
         return NormalizedTable(
@@ -234,6 +252,7 @@ class ExcelPreprocessor:
             enum_columns=enum_columns,
             oversized_cells=oversized_cells,
             warnings=warnings,
+            header_paths=header_paths,
         )
 
     def _context_group_label(
@@ -346,11 +365,37 @@ class ExcelPreprocessor:
         dataframe: pd.DataFrame,
         column: str,
         enum_columns: dict[str, list[str]],
+        header_paths: dict[str, list[str]],
     ) -> dict[str, Any]:
         metadata: dict[str, Any] = {"name": column, "dtype": str(dataframe[column].dtype)}
         if column in enum_columns:
             metadata["enum_values"] = enum_columns[column]
+        metadata["header_path"] = list(header_paths.get(column) or [column])
         return metadata
+
+    def _build_header_paths(
+        self,
+        *,
+        deduped_headers: list[str],
+        raw_paths: list[list[str]],
+        dataframe_columns: list[str],
+    ) -> dict[str, list[str]]:
+        """Assemble the per-column header lineage map.
+
+        - Detected data headers keep their multi-level lineage.
+        - Synthetic columns (`_context_group`, `_source_*`) get a single-level
+          path equal to the column name so downstream code can treat every
+          column uniformly.
+        """
+        header_paths: dict[str, list[str]] = {}
+        for name, raw in zip(deduped_headers, raw_paths):
+            if raw:
+                header_paths[name] = list(raw)
+            else:
+                header_paths[name] = [name]
+        for column in dataframe_columns:
+            header_paths.setdefault(column, [column])
+        return header_paths
 
     def _range_bound(self, value: Any, range_ref: str) -> int:
         if value is None:
@@ -493,16 +538,21 @@ class ExcelPreprocessor:
 
     def _merge_multi_level_headers(
         self, rows: list[list[Any]], header_row: int, start_rel: int = 1
-    ) -> None:
+    ) -> list[list[str]]:
         """多层表头合并为单层：'采购金额' + '计划' → '采购金额_计划'。
 
         直接修改 rows 中 header_row-1 位置的行（rows 是 0-indexed list，header_row 是 1-based）。
         start_rel: 表头起始行（1-based），默认为 1。只合并 start_rel..header_row 范围内的行。
+
+        Returns per-column header lineage lists (top-level group → leaf column,
+        empty levels dropped, adjacent duplicates dedupped). Callers use this to
+        keep track of the original hierarchy after the flat merge destroys it.
         """
         if header_row <= 1:
-            return
+            return []
         num_cols = len(rows[0]) if rows else 0
         merged_headers = []
+        header_paths: list[list[str]] = []
         for col_idx in range(num_cols):
             parts: list[str] = []
             for row_idx in range(start_rel - 1, header_row):  # start_rel-1..header_row-1
@@ -515,7 +565,9 @@ class ExcelPreprocessor:
                 if p not in seen:
                     seen.append(p)
             merged_headers.append("_".join(seen) if seen else f"列{col_idx + 1}")
+            header_paths.append(seen)
         rows[header_row - 1] = merged_headers
+        return header_paths
 
     def _detect_data_end(self, rows: list[list[Any]], header_row: int) -> int:
         """从底部向上扫描，过滤脚注行，返回最后一个有效数据行的 1-based 索引。"""

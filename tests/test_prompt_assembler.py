@@ -298,6 +298,107 @@ def test_profile_prompt_explains_context_group_columns():
     assert "不要把 Unit/单位/计量单位列当作楼层或分组列" in prompt
 
 
+def test_profile_prompt_renders_header_path_when_multi_level():
+    step = Step(id="s1", tool="python", description="查询", instruction="按 Scotland 2023 求和")
+    context = TaskContext(
+        task_id="t1",
+        user_query="Compare Landings into Scotland vs England for 2023",
+        workbook_manifest={},
+        data_profile={
+            "tables": [
+                {
+                    "table_id": "Sheet1_t1",
+                    "source": "Sheet1!A1:E5",
+                    "path": "normalized/Sheet1_t1.parquet",
+                    "shape": {"rows": 2, "cols": 5},
+                    "columns_detail": [
+                        {
+                            "name": "Species",
+                            "dtype": "object",
+                            "header_path": ["Species"],
+                        },
+                        {
+                            "name": "2022",
+                            "dtype": "int64",
+                            "header_path": ["Landings into", "Scotland", "2022"],
+                        },
+                        {
+                            "name": "2023",
+                            "dtype": "int64",
+                            "header_path": ["Landings into", "Scotland", "2023"],
+                        },
+                        {
+                            "name": "2022_2",
+                            "dtype": "int64",
+                            "header_path": ["Landings into", "England", "2022"],
+                        },
+                        {
+                            "name": "2023_2",
+                            "dtype": "int64",
+                            "header_path": ["Landings into", "England", "2023"],
+                        },
+                    ],
+                    "columns_grouped": [],
+                }
+            ]
+        },
+        plan=ExecutionPlan([step]),
+    )
+
+    prompt = PromptAssembler().assemble(context, step)
+
+    # Multi-level columns get an inline lineage annotation
+    assert "2023(int64)[header_path: Landings into > Scotland > 2023]" in prompt
+    assert "2023_2(int64)[header_path: Landings into > England > 2023]" in prompt
+    # Single-level column stays compact — no header_path noise
+    assert "Species(object)" in prompt
+    assert "Species(object)[header_path" not in prompt
+    # Conditional hint kicks in
+    assert "header_path" in prompt
+    assert "Landings into > £(000) > 2008/09" in prompt or "顶级组 → 叶列" in prompt
+    assert "不要只匹配叶列名" in prompt
+
+
+def test_profile_prompt_omits_header_path_hint_for_flat_tables():
+    step = Step(id="s1", tool="python", description="查询", instruction="求和")
+    context = TaskContext(
+        task_id="t1",
+        user_query="What is the total amount?",
+        workbook_manifest={},
+        data_profile={
+            "tables": [
+                {
+                    "table_id": "Sheet1_t1",
+                    "source": "Sheet1!A1:B3",
+                    "path": "normalized/Sheet1_t1.parquet",
+                    "shape": {"rows": 2, "cols": 2},
+                    "columns_detail": [
+                        {
+                            "name": "Name",
+                            "dtype": "object",
+                            "header_path": ["Name"],
+                        },
+                        {
+                            "name": "Amount",
+                            "dtype": "int64",
+                            "header_path": ["Amount"],
+                        },
+                    ],
+                }
+            ]
+        },
+        plan=ExecutionPlan([step]),
+    )
+
+    prompt = PromptAssembler().assemble(context, step)
+
+    assert "Name(object)" in prompt
+    assert "Amount(int64)" in prompt
+    # No header_path annotation, no hint — flat table stays flat
+    assert "[header_path:" not in prompt
+    assert "顶级组 → 叶列" not in prompt
+
+
 def test_python_prompt_includes_rate_hints_only_when_rate_columns_exist():
     step = Step(id="s1", tool="python", description="查询", instruction="查询增长率")
     context = TaskContext(

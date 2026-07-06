@@ -389,6 +389,197 @@ def test_context_group_still_detects_first_floor_pattern():
     assert label == "First Floor"
 
 
+def test_merge_multi_level_headers_returns_lineage():
+    preprocessor = ExcelPreprocessor()
+    rows = [
+        ["采购金额", "采购金额", "销售金额", "销售金额"],
+        ["计划", "实际", "计划", "实际"],
+        [100, 110, 200, 190],
+    ]
+
+    paths = preprocessor._merge_multi_level_headers(rows, header_row=2)
+
+    assert paths == [
+        ["采购金额", "计划"],
+        ["采购金额", "实际"],
+        ["销售金额", "计划"],
+        ["销售金额", "实际"],
+    ]
+
+
+def test_process_preserves_header_lineage_for_grouped_year_columns(tmp_path):
+    """Sparse grouped headers (SheetBench 118 shape).
+
+    Parent group `Total Fundraising / Grant / Total Income` spans a
+    `£(000)` unit row above per-year leaf columns. Post-normalize we should
+    see year columns keyed by their dedup names and a `header_paths` map
+    that resolves them back to the parent group.
+    """
+
+    workbook_path = tmp_path / "grouped_years.xlsx"
+    workbook = openpyxl.Workbook()
+    ws = workbook.active
+    ws.title = "Sheet1"
+    # Row 1: parent group (spanned via merged cells)
+    ws.append(["Charity", "Total Fundraising", None, "Grant", None])
+    ws.merge_cells("B1:C1")
+    ws.merge_cells("D1:E1")
+    # Row 2: unit row
+    ws.append([None, "£(000)", "£(000)", "£(000)", "£(000)"])
+    # Row 3: leaf year columns
+    ws.append([None, "2008/09", "2009/10", "2008/09", "2009/10"])
+    # Data rows
+    ws.append(["Cancer Research UK", 42, 55, 12, 15])
+    ws.append(["Oxfam", 30, 33, 20, 22])
+    workbook.save(workbook_path)
+
+    manifest = {
+        "manifest_path": "workbook_manifest.json",
+        "files": [
+            {
+                "path": str(workbook_path),
+                "sheets": [
+                    {
+                        "name": "Sheet1",
+                        "tables": [
+                            {
+                                "table_id": "Sheet1_t1",
+                                "range": "A1:E5",
+                                "header_candidates": [1, 2, 3],
+                            }
+                        ],
+                    }
+                ],
+            }
+        ],
+    }
+
+    result = ExcelPreprocessor().process(workbook_path, manifest)
+    table = result.tables[0]
+
+    # `_merge_multi_level_headers` concatenates parent → leaf with underscores;
+    # header_paths keeps the structured lineage side-by-side for downstream use.
+    fund_col = "Total Fundraising_£(000)_2008/09"
+    grant_col = "Grant_£(000)_2008/09"
+    assert fund_col in table.header_paths
+    assert grant_col in table.header_paths
+    assert table.header_paths[fund_col] == ["Total Fundraising", "£(000)", "2008/09"]
+    assert table.header_paths[grant_col] == ["Grant", "£(000)", "2008/09"]
+    # Charity column has no lineage → single-element path equal to the name
+    assert table.header_paths["Charity"] == ["Charity"]
+    # header_path also shows up on column metadata for downstream consumers
+    charity_meta = next(c for c in table.columns if c["name"] == "Charity")
+    assert charity_meta["header_path"] == ["Charity"]
+
+
+def test_process_preserves_header_lineage_for_region_year_columns(tmp_path):
+    """Region × year multi-level headers (SheetBench 2292 shape).
+
+    `Landings into` groups regions like `Scotland` and `England`, each
+    with per-year sub-columns. Leaf column names collide, so lineage is
+    the only reliable way to pick the right column.
+    """
+
+    workbook_path = tmp_path / "region_year.xlsx"
+    workbook = openpyxl.Workbook()
+    ws = workbook.active
+    ws.title = "Sheet1"
+    # Row 1: top-level group
+    ws.append(["Species", "Landings into", None, None, None])
+    ws.merge_cells("B1:E1")
+    # Row 2: region
+    ws.append([None, "Scotland", "Scotland", "England", "England"])
+    ws.merge_cells("B2:C2")
+    ws.merge_cells("D2:E2")
+    # Row 3: year
+    ws.append([None, "2022", "2023", "2022", "2023"])
+    # Data
+    ws.append(["Cod", 100, 110, 50, 55])
+    ws.append(["Haddock", 80, 90, 40, 45])
+    workbook.save(workbook_path)
+
+    manifest = {
+        "manifest_path": "workbook_manifest.json",
+        "files": [
+            {
+                "path": str(workbook_path),
+                "sheets": [
+                    {
+                        "name": "Sheet1",
+                        "tables": [
+                            {
+                                "table_id": "Sheet1_t1",
+                                "range": "A1:E5",
+                                "header_candidates": [1, 2, 3],
+                            }
+                        ],
+                    }
+                ],
+            }
+        ],
+    }
+
+    result = ExcelPreprocessor().process(workbook_path, manifest)
+    table = result.tables[0]
+
+    # Merged names carry parent+region+year; header_paths keeps the structured
+    # lineage so the model can pick e.g. Scotland vs England without parsing
+    # the underscored name.
+    scotland_2023 = "Landings into_Scotland_2023"
+    england_2023 = "Landings into_England_2023"
+    assert table.header_paths[scotland_2023] == [
+        "Landings into",
+        "Scotland",
+        "2023",
+    ]
+    assert table.header_paths[england_2023] == [
+        "Landings into",
+        "England",
+        "2023",
+    ]
+
+
+def test_process_populates_trivial_header_path_for_single_level_tables(tmp_path):
+    """Single-level tables also get header_path, keyed to the column name."""
+
+    workbook_path = tmp_path / "flat.xlsx"
+    workbook = openpyxl.Workbook()
+    ws = workbook.active
+    ws.title = "Sheet1"
+    ws.append(["Name", "Amount"])
+    ws.append(["A", 10])
+    ws.append(["B", 20])
+    workbook.save(workbook_path)
+
+    manifest = {
+        "manifest_path": "workbook_manifest.json",
+        "files": [
+            {
+                "path": str(workbook_path),
+                "sheets": [
+                    {
+                        "name": "Sheet1",
+                        "tables": [
+                            {
+                                "table_id": "Sheet1_t1",
+                                "range": "A1:B3",
+                                "header_candidates": [1],
+                            }
+                        ],
+                    }
+                ],
+            }
+        ],
+    }
+
+    result = ExcelPreprocessor().process(workbook_path, manifest)
+    table = result.tables[0]
+    assert table.header_paths["Name"] == ["Name"]
+    assert table.header_paths["Amount"] == ["Amount"]
+    for col_meta in table.columns:
+        assert col_meta["header_path"] == [col_meta["name"]]
+
+
 def test_process_records_enum_and_oversized_metadata_without_truncating_data(tmp_path):
     workbook_path = tmp_path / "input.xlsx"
     long_text = "很长的说明" * 50

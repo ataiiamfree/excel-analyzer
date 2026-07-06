@@ -291,7 +291,12 @@ class PromptAssembler:
             if not name:
                 continue
             dtype = item.get("dtype", "?")
-            columns.append(f"{name}({dtype})")
+            path = item.get("header_path") or []
+            if isinstance(path, list) and len(path) > 1:
+                lineage = " > ".join(str(p) for p in path)
+                columns.append(f"{name}({dtype})[header_path: {lineage}]")
+            else:
+                columns.append(f"{name}({dtype})")
 
         for group in table.get("columns_grouped") or []:
             pattern = group.get("pattern")
@@ -329,7 +334,12 @@ class PromptAssembler:
         tables = profile.get("tables", []) if isinstance(profile, dict) else []
         has_column_families = self._has_column_families(tables)
         has_context_columns = self._has_context_columns(tables)
-        if not has_column_families and not has_context_columns:
+        has_multi_level_headers = self._has_multi_level_headers(tables)
+        if (
+            not has_column_families
+            and not has_context_columns
+            and not has_multi_level_headers
+        ):
             return ""
         lines = ["## 表结构提示"]
         if has_context_columns:
@@ -338,6 +348,15 @@ class PromptAssembler:
                     "- `_context_*` 列表示从父级/楼层/分组标题行提取并下传到明细行的上下文。",
                     "- 遇到楼层、区域、部门、类别等条件时，优先用 `_context_*` 过滤明细行；"
                     "不要把 Unit/单位/计量单位列当作楼层或分组列。",
+                ]
+            )
+        if has_multi_level_headers:
+            lines.extend(
+                [
+                    "- `header_path` 是每列在原表的表头层级路径（顶级组 → 叶列），"
+                    "如 `Total Fundraising > £(000) > 2008/09`。",
+                    "- 当问题提到上层组（分类、地区、年份、材料等）时，请用 header_path 定位包含该组的列，"
+                    "不要只匹配叶列名，也不要把上层组当作行值去筛选。",
                 ]
             )
         if has_column_families:
@@ -394,6 +413,16 @@ class PromptAssembler:
 
     def _has_column_families(self, tables: list[dict[str, Any]]) -> bool:
         return any(table.get("column_families") for table in tables)
+
+    def _has_multi_level_headers(self, tables: list[dict[str, Any]]) -> bool:
+        for table in tables:
+            for column in table.get("columns_detail") or []:
+                if not isinstance(column, dict):
+                    continue
+                path = column.get("header_path")
+                if isinstance(path, list) and len(path) > 1:
+                    return True
+        return False
 
     def _has_rate_columns(self, tables: list[dict[str, Any]]) -> bool:
         names = self._profile_column_names(tables)
