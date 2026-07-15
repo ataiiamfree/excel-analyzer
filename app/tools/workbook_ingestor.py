@@ -214,12 +214,16 @@ class WorkbookIngestor:
             # string quoting still get picked up.
             text_like = [
                 v for v in non_empty
-                if isinstance(v, str) or self._is_year_like_int(v)
+                if (isinstance(v, str) and not self._is_formula(v))
+                or self._is_year_like_int(v)
             ]
             data_values = [
                 v for v in non_empty
-                if isinstance(v, (int, float, datetime.date, datetime.datetime))
-                and not self._is_year_like_int(v)
+                if (
+                    isinstance(v, (int, float, datetime.date, datetime.datetime))
+                    and not self._is_year_like_int(v)
+                )
+                or self._is_formula(v)
             ]
             unique_texts = {
                 str(v).strip()
@@ -237,14 +241,21 @@ class WorkbookIngestor:
             }
 
         found_first = False
-        for row_idx in range(min_row, scan_end + 1):
+        row_idx = min_row
+        while row_idx <= scan_end:
             sig = row_signals[row_idx]
             if sig["blank"]:
                 if found_first:
                     break
+                row_idx += 1
                 continue
             if sig["data_count"] > 0:
-                # First row carrying real data → end of the header search.
+                if not found_first:
+                    # Numeric report metadata can precede the real header.
+                    # Keep scanning until a credible text header appears.
+                    row_idx += 1
+                    continue
+                # First real data row after the header block ends the search.
                 break
             base_header_like = (
                 sig["density"] >= 0.4
@@ -267,6 +278,7 @@ class WorkbookIngestor:
                 # so per-cell annotations reach the leaf lineage, but do not
                 # advance found_first blocks — subsequent primaries handle it.
                 candidates.append(row_idx)
+            row_idx += 1
 
         # Backward extension: sparse parent-group rows (e.g. `Landings into` in
         # one cell, `Total landings` in another) are below the density
@@ -297,6 +309,9 @@ class WorkbookIngestor:
         if not isinstance(value, int) or isinstance(value, bool):
             return False
         return 1900 <= value <= 2100
+
+    def _is_formula(self, value: Any) -> bool:
+        return isinstance(value, str) and value.lstrip().startswith("=")
 
     def _build_merged_value_map(
         self,

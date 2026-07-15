@@ -805,6 +805,45 @@ def test_ingest_then_process_preserves_multi_level_lineage_end_to_end(tmp_path):
     assert fund_meta["header_path"] == ["Total Fundraising", "£(000)", "2008/09"]
 
 
+def test_ingest_then_process_retains_group_columns_after_numeric_preamble(tmp_path):
+    from app.tools.workbook_ingestor import WorkbookIngestor
+
+    workbook_path = tmp_path / "matrix_header.xlsx"
+    workbook = openpyxl.Workbook()
+    ws = workbook.active
+    ws.title = "Matrix"
+
+    ws.append(["Quarterly operating matrix", None, None, None, None, None])
+    ws.append([None, 301, 302, 303, 304, 305])
+    ws.append([None, "North", None, "South", None, "TOTAL"])
+    ws.merge_cells("B3:C3")
+    ws.merge_cells("D3:E3")
+    ws.merge_cells("F3:F6")
+    ws.append([None, "=1+1", "=1+2", "=1+3", "=1+4", None])
+    ws.append([None, "=10+1", "=10+2", "=10+3", "=10+4", None])
+    ws.append(["Metric", "Retail", "Online", "Retail", "Online", None])
+    ws.append(["Revenue", 10, 20, 30, 40, 100])
+    ws.append(["Cost", 4, 8, 12, 16, 40])
+    workbook.save(workbook_path)
+
+    manifest = WorkbookIngestor().scan(workbook_path)
+    table = ExcelPreprocessor().process(workbook_path, manifest).tables[0]
+    normalized_path = Path(table.parquet_path)
+    normalized = (
+        pd.read_parquet(normalized_path)
+        if normalized_path.suffix == ".parquet"
+        else pd.read_excel(normalized_path)
+    )
+
+    assert "TOTAL" in normalized.columns
+    revenue = normalized[
+        normalized[normalized.columns[0]].astype(str).str.strip().eq("Revenue")
+    ]
+    assert len(revenue) == 1
+    assert revenue.iloc[0]["TOTAL"] == 100
+    assert table.header_paths["TOTAL"] == ["TOTAL"]
+
+
 def test_process_populates_trivial_header_path_for_single_level_tables(tmp_path):
     """Single-level tables also get header_path, keyed to the column name."""
 
