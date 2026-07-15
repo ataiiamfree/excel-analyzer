@@ -37,6 +37,28 @@ from app.workspace import Workspace
 EventSender = Callable[[dict[str, Any]], Awaitable[None]]
 MAX_PERSISTED_REASONING_CHARS = 20_000
 
+# Process-wide concurrency limiter shared by WS and headless REST runs. Sized
+# from `Config.max_concurrent_tasks` on first use so tests can monkeypatch the
+# config before the semaphore is materialised.
+_run_semaphore: asyncio.Semaphore | None = None
+_run_semaphore_size: int | None = None
+
+
+def _get_run_semaphore(config: Config) -> asyncio.Semaphore:
+    global _run_semaphore, _run_semaphore_size
+    size = max(1, int(getattr(config, "max_concurrent_tasks", 1) or 1))
+    if _run_semaphore is None or _run_semaphore_size != size:
+        _run_semaphore = asyncio.Semaphore(size)
+        _run_semaphore_size = size
+    return _run_semaphore
+
+
+def _reset_run_semaphore_for_tests() -> None:
+    """Test hook: drop the cached semaphore so a fresh config takes effect."""
+    global _run_semaphore, _run_semaphore_size
+    _run_semaphore = None
+    _run_semaphore_size = None
+
 
 class EventEmitter:
     def __init__(self, sender: EventSender | None = None) -> None:
@@ -164,8 +186,9 @@ async def run_ephemeral_query(
     file_path: str,
     query: str,
     sender: EventSender | None = None,
+    run_id: str | None = None,
 ) -> RunResult:
-    run_id = f"run_{uuid.uuid4().hex}"
+    run_id = run_id or f"run_{uuid.uuid4().hex}"
     session = Session(session_id=run_id, file_path=file_path)
     return await _run_query(
         store=store,
@@ -180,6 +203,33 @@ async def run_ephemeral_query(
 
 
 async def _run_query(
+    *,
+    store: Store,
+    config: Config,
+    session: Session,
+    query: str,
+    client_msg_id: str | None,
+    sender: EventSender | None,
+    conversation_id: str | None,
+    persist_messages: bool,
+) -> RunResult:
+    # Cap process-wide concurrent runs (WS + REST share the same semaphore).
+    # `Config.max_concurrent_tasks` defaults to 1 for MVP; eval workloads can
+    # raise it via env var without changing user-facing behaviour.
+    async with _get_run_semaphore(config):
+        return await _execute_run(
+            store=store,
+            config=config,
+            session=session,
+            query=query,
+            client_msg_id=client_msg_id,
+            sender=sender,
+            conversation_id=conversation_id,
+            persist_messages=persist_messages,
+        )
+
+
+async def _execute_run(
     *,
     store: Store,
     config: Config,

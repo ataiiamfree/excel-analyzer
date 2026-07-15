@@ -59,9 +59,14 @@ class RunRegistry:
     def get_state(self, run_id: str) -> dict[str, Any] | None:
         return self._states.get(run_id)
 
+    def clear_task(self, run_id: str) -> None:
+        """Release the task reference; state stays so GET keeps working."""
+        self._tasks.pop(run_id, None)
+
     def cancel(self, run_id: str) -> bool:
         task = self._tasks.get(run_id)
-        if task is None:
+        if task is None or task.done():
+            # Already finished (done / failed / cancelled) — nothing to cancel.
             return False
         task.cancel()
         self.update(run_id, status="cancelled")
