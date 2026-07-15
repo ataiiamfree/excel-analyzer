@@ -3,10 +3,16 @@ interface ReasoningCapsuleProps {
   open?: boolean;
 }
 
+const MAX_VISIBLE_REASONING_CHARS = 12_000;
+
 export default function ReasoningCapsule({ reasoning, open }: ReasoningCapsuleProps) {
   if (!reasoning?.text) {
     return null;
   }
+  const truncated = reasoning.text.length > MAX_VISIBLE_REASONING_CHARS;
+  const visibleText = truncated
+    ? reasoning.text.slice(-MAX_VISIBLE_REASONING_CHARS)
+    : reasoning.text;
   return (
     <details className="reasoning" open={open}>
       <summary>
@@ -16,8 +22,9 @@ export default function ReasoningCapsule({ reasoning, open }: ReasoningCapsulePr
         <span className="chev">›</span>
       </summary>
       <div className="stream">
+        {truncated ? <div className="reasoning-truncated">内容较长，仅显示最近片段</div> : null}
         <p>
-          {reasoning.text}
+          {visibleText}
           {open ? <span className="caret" /> : null}
         </p>
       </div>

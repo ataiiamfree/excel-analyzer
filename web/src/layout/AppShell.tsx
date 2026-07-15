@@ -16,17 +16,41 @@ interface AppShellProps {
 
 export default function AppShell({ conversation, groups, artifacts, children }: AppShellProps) {
   const artifactPanelOpen = useUiStore((state) => state.artifactPanelOpen);
+  const setArtifactPanelOpen = useUiStore((state) => state.setArtifactPanelOpen);
   const activeArtifactId = useUiStore((state) => state.activeArtifactId);
+  const mobileSidebarOpen = useUiStore((state) => state.mobileSidebarOpen);
+  const setMobileSidebarOpen = useUiStore((state) => state.setMobileSidebarOpen);
   const panelArtifacts = dedupeArtifacts(artifacts, activeArtifactId);
 
   return (
     <div className={`app ${artifactPanelOpen ? "" : "no-artifact"}`}>
-      <Sidebar activeId={conversation?.id} groups={groups} />
+      <Sidebar
+        activeId={conversation?.id}
+        groups={groups}
+        mobileOpen={mobileSidebarOpen}
+        onNavigate={() => setMobileSidebarOpen(false)}
+      />
+      {mobileSidebarOpen ? (
+        <button
+          className="mobile-backdrop"
+          title="关闭会话列表"
+          onClick={() => setMobileSidebarOpen(false)}
+        />
+      ) : null}
       <main className="center">
         <Topbar conversation={conversation} artifactCount={panelArtifacts.length} />
         {children}
       </main>
-      {artifactPanelOpen ? <ArtifactPanel artifacts={panelArtifacts} /> : null}
+      {artifactPanelOpen ? (
+        <>
+          <button
+            className="panel-backdrop"
+            title="关闭产物面板"
+            onClick={() => setArtifactPanelOpen(false)}
+          />
+          <ArtifactPanel artifacts={panelArtifacts} />
+        </>
+      ) : null}
     </div>
   );
 }

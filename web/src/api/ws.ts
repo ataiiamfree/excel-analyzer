@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { AssistantMessagePayload, Message, ServerEvent } from "./types";
 
+const MAX_LIVE_REASONING_CHARS = 20_000;
+
 function initialPayload(query = ""): AssistantMessagePayload {
   return {
     status: "running",
@@ -31,7 +33,7 @@ function reduceEvent(payload: AssistantMessagePayload | null, event: ServerEvent
     return {
       ...payload,
       reasoning: {
-        text: current.text + event.delta,
+        text: (current.text + event.delta).slice(-MAX_LIVE_REASONING_CHARS),
         tokens: current.tokens + Math.max(1, Math.floor(event.delta.length / 4))
       }
     };
@@ -77,7 +79,7 @@ function reduceEvent(payload: AssistantMessagePayload | null, event: ServerEvent
     const result = event.result;
     return {
       ...(result ?? payload),
-      status: "done",
+      status: result?.status ?? "done",
       report: event.report || result?.report || payload.report,
       next_actions: result?.next_actions ?? payload.next_actions ?? [],
       artifact_ids: event.file_ids.length ? event.file_ids : result?.artifact_ids ?? payload.artifact_ids,
@@ -90,7 +92,8 @@ function reduceEvent(payload: AssistantMessagePayload | null, event: ServerEvent
       status: "failed",
       error: {
         failed_step_description: event.failed_step_description,
-        summary: event.error_summary
+        summary: event.error_summary,
+        kind: event.error_kind
       }
     };
   }
@@ -102,9 +105,11 @@ function reduceEvent(payload: AssistantMessagePayload | null, event: ServerEvent
 
 export function useConversationStream(conversationId: string) {
   const socketRef = useRef<WebSocket | null>(null);
-  const [status, setStatus] = useState<"connecting" | "open" | "closed">("connecting");
+  const [status, setStatus] = useState<"connecting" | "open" | "reconnecting" | "closed">("connecting");
   const [livePayload, setLivePayload] = useState<AssistantMessagePayload | null>(null);
   const [pendingUserMessage, setPendingUserMessage] = useState<Message | null>(null);
+  const [connectionError, setConnectionError] = useState("");
+  const [reconnectKey, setReconnectKey] = useState(0);
 
   const wsUrl = useMemo(() => {
     const proto = window.location.protocol === "https:" ? "wss" : "ws";
@@ -112,25 +117,60 @@ export function useConversationStream(conversationId: string) {
   }, [conversationId]);
 
   useEffect(() => {
+    let disposed = false;
+    let retryTimer: number | undefined;
+    let retryCount = 0;
+
     setLivePayload(null);
     setPendingUserMessage(null);
+    setConnectionError("");
     setStatus("connecting");
-    const ws = new WebSocket(wsUrl);
-    socketRef.current = ws;
-    ws.onopen = () => setStatus("open");
-    ws.onclose = () => setStatus("closed");
-    ws.onerror = () => setStatus("closed");
-    ws.onmessage = (message) => {
-      const event = JSON.parse(message.data) as ServerEvent;
-      setLivePayload((current) => reduceEvent(current, event));
-    };
-    return () => {
-      ws.close();
-      if (socketRef.current === ws) {
+
+    const connect = () => {
+      if (disposed) return;
+      setStatus(retryCount === 0 ? "connecting" : "reconnecting");
+      const ws = new WebSocket(wsUrl);
+      socketRef.current = ws;
+      ws.onopen = () => {
+        retryCount = 0;
+        setConnectionError("");
+        setStatus("open");
+      };
+      ws.onclose = () => {
+        if (disposed) return;
         socketRef.current = null;
-      }
+        if (retryCount < 3) {
+          retryCount += 1;
+          setStatus("reconnecting");
+          retryTimer = window.setTimeout(connect, 2 ** (retryCount - 1) * 1000);
+        } else {
+          setStatus("closed");
+          setConnectionError("连接已断开，请检查后端服务后重连");
+        }
+      };
+      ws.onerror = () => ws.close();
+      ws.onmessage = (message) => {
+        try {
+          const event = JSON.parse(message.data) as ServerEvent;
+          if (event.type === "error") {
+            setConnectionError(event.summary);
+            return;
+          }
+          setLivePayload((current) => reduceEvent(current, event));
+        } catch {
+          setConnectionError("收到了无法解析的服务器消息");
+        }
+      };
     };
-  }, [wsUrl]);
+
+    connect();
+    return () => {
+      disposed = true;
+      if (retryTimer) window.clearTimeout(retryTimer);
+      socketRef.current?.close();
+      socketRef.current = null;
+    };
+  }, [reconnectKey, wsUrl]);
 
   const sendMessage = useCallback((content: string) => {
     const text = content.trim();
@@ -161,5 +201,18 @@ export function useConversationStream(conversationId: string) {
     socketRef.current?.send(JSON.stringify({ type: "cancel" }));
   }, []);
 
-  return { status, livePayload, pendingUserMessage, sendMessage, cancel };
+  const reconnect = useCallback(() => {
+    socketRef.current?.close();
+    setReconnectKey((value) => value + 1);
+  }, []);
+
+  return {
+    status,
+    connectionError,
+    livePayload,
+    pendingUserMessage,
+    sendMessage,
+    cancel,
+    reconnect
+  };
 }

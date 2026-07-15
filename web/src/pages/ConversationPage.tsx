@@ -1,8 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { fetchArtifacts, fetchConversation, fetchConversations, fetchMessages } from "../api/http";
+import {
+  fetchArtifacts,
+  fetchConversation,
+  fetchConversations,
+  fetchMessages,
+  replaceConversationFile
+} from "../api/http";
 import { useConversationStream } from "../api/ws";
 import type { AssistantMessagePayload, Message, UserMessagePayload } from "../api/types";
 import AppShell from "../layout/AppShell";
@@ -54,6 +60,7 @@ export default function ConversationPage() {
   const queryClient = useQueryClient();
   const sentInitial = useRef(false);
   const [threadAtBottom, setThreadAtBottom] = useState(true);
+  const [fileNotice, setFileNotice] = useState("");
   const state = (location.state ?? {}) as LocationState;
   const initialQuery = state.initialQuery?.trim() ?? "";
 
@@ -75,6 +82,17 @@ export default function ConversationPage() {
     refetchInterval: 2500
   });
   const stream = useConversationStream(conversationId);
+  const replaceFile = useMutation({
+    mutationFn: (file: File) => replaceConversationFile(conversationId, file),
+    onSuccess: (updated) => {
+      setFileNotice(`已切换到 ${updated.file_name ?? "新 Excel 文件"}`);
+      queryClient.invalidateQueries({ queryKey: ["conversation", conversationId] });
+      queryClient.invalidateQueries({ queryKey: ["conversations"] });
+    },
+    onError: (error) => {
+      setFileNotice(error instanceof Error ? error.message : "替换 Excel 失败");
+    }
+  });
   const persistedMessageCount = messages.data?.length ?? 0;
 
   useEffect(() => {
@@ -83,12 +101,18 @@ export default function ConversationPage() {
   }, [conversationId]);
 
   useEffect(() => {
-    if (stream.livePayload?.status === "done" || stream.livePayload?.status === "failed") {
+    if (["done", "failed", "cancelled"].includes(stream.livePayload?.status ?? "")) {
       queryClient.invalidateQueries({ queryKey: ["messages", conversationId] });
       queryClient.invalidateQueries({ queryKey: ["artifacts", conversationId] });
       queryClient.invalidateQueries({ queryKey: ["conversations"] });
     }
   }, [conversationId, queryClient, stream.livePayload?.status]);
+
+  useEffect(() => {
+    if (stream.status !== "open") return;
+    queryClient.invalidateQueries({ queryKey: ["messages", conversationId] });
+    queryClient.invalidateQueries({ queryKey: ["conversation", conversationId] });
+  }, [conversationId, queryClient, stream.status]);
 
   useEffect(() => {
     if (!initialQuery || sentInitial.current || !messages.isFetched || stream.status !== "open") {
@@ -139,7 +163,11 @@ export default function ConversationPage() {
   const handleThreadBottomChange = useCallback((atBottom: boolean) => {
     setThreadAtBottom(atBottom);
   }, []);
-  const actionsDisabled = stream.status !== "open" || stream.livePayload?.status === "running";
+  const isRunning = stream.livePayload?.status === "running";
+  const connectionUnavailable = stream.status !== "open";
+  const conversationUnavailable =
+    conversation.isLoading || messages.isLoading || conversation.isError || messages.isError;
+  const actionsDisabled = connectionUnavailable || isRunning;
   const handleRegenerate = useCallback(
     (query: string) => {
       if (actionsDisabled) {
@@ -150,20 +178,54 @@ export default function ConversationPage() {
     [actionsDisabled, stream.sendMessage]
   );
 
+  const connectionNotice =
+    stream.status === "connecting"
+      ? "正在连接分析服务..."
+      : stream.status === "reconnecting"
+        ? "连接中断，正在自动重连..."
+        : stream.status === "closed"
+          ? stream.connectionError || "连接已断开"
+          : stream.connectionError;
+  const composerNotice = replaceFile.isPending
+    ? "正在校验并替换 Excel..."
+    : fileNotice || connectionNotice;
+
+  const threadContent = conversation.isLoading || messages.isLoading ? (
+    <div className="page-state" role="status">
+      <span className="state-spinner" />
+      <strong>正在加载会话</strong>
+    </div>
+  ) : conversation.isError || messages.isError ? (
+    <div className="page-state error" role="alert">
+      <strong>无法加载该会话</strong>
+      <span>{(conversation.error ?? messages.error)?.message ?? "会话不存在或服务暂时不可用"}</span>
+      <button onClick={() => navigate("/")}>返回首页</button>
+    </div>
+  ) : (
+    <Thread
+      messages={displayedMessages}
+      livePayload={livePayload}
+      artifacts={allArtifacts}
+      actionsDisabled={actionsDisabled}
+      onAtBottomChange={handleThreadBottomChange}
+      onRegenerate={handleRegenerate}
+    />
+  );
+
   return (
     <AppShell conversation={conversation.data} groups={conversations.data?.groups ?? []} artifacts={allArtifacts}>
-      <Thread
-        messages={displayedMessages}
-        livePayload={livePayload}
-        artifacts={allArtifacts}
-        actionsDisabled={actionsDisabled}
-        onAtBottomChange={handleThreadBottomChange}
-        onRegenerate={handleRegenerate}
-      />
+      {threadContent}
       <Composer
-        disabled={actionsDisabled}
+        disabled={connectionUnavailable || conversationUnavailable}
+        running={isRunning}
+        attaching={replaceFile.isPending}
         nextActions={nextActions}
+        notice={composerNotice}
         onSend={stream.sendMessage}
+        onCancel={stream.cancel}
+        onAttach={(file) => replaceFile.mutateAsync(file)}
+        onReconnect={stream.reconnect}
+        reconnectAvailable={stream.status === "closed"}
       />
     </AppShell>
   );

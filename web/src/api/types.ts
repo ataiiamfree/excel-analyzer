@@ -70,7 +70,7 @@ export interface AssistantMessagePayload {
   next_actions: string[];
   artifact_ids: string[];
   metrics: Record<string, unknown>;
-  error?: { failed_step_description: string; summary: string } | null;
+  error?: { failed_step_description: string; summary: string; kind?: string } | null;
 }
 
 export interface Artifact {
@@ -150,5 +150,19 @@ export type ServerEvent =
       duration_ms: number;
       result?: AssistantMessagePayload & { artifacts?: Artifact[] };
     }
-  | { type: "run.failed"; seq: number; ts: string; failed_step_description: string; error_summary: string }
-  | { type: "cancelled"; seq: number; ts: string };
+  | {
+      type: "run.failed";
+      seq: number;
+      ts: string;
+      failed_step_description: string;
+      error_summary: string;
+      error_kind: "timeout" | "rate_limit" | "analysis_failed" | "other";
+    }
+  | { type: "cancelled"; seq: number; ts: string }
+  | {
+      type: "error";
+      seq: number;
+      ts: string;
+      error_kind: "invalid_message" | "run_in_progress" | "no_active_run";
+      summary: string;
+    };
