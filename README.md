@@ -2,6 +2,8 @@
 
 上传 Excel 文件，用自然语言提出分析需求，自动生成 Python 代码执行分析并输出报告。当前交互层已重构为 **FastAPI + WebSocket 后端** 与 **React/TypeScript 前端**。
 
+当前交付版本为 **v0.9.0 MVP**。交付范围、测试证据和已知限制见 [v0.9 MVP 交付说明](docs/V0.9-MVP-Release.md)。
+
 ## 架构
 
 采用 **Adaptive Plan-Execute** 编排：先粗略规划全局，每步执行后根据实际结果动态细化下一步。每次 LLM 调用独立，不累积上下文。
@@ -47,8 +49,8 @@ python scripts/run_eval.py --benchmark spreadsheetbench-v2 --benchmark-variant f
 
 ```bash
 # Python 3.10+
-python -m venv venv
-source venv/bin/activate  # Windows: venv\Scripts\activate
+python -m venv .venv
+source .venv/bin/activate  # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 cd web && npm install && cd ..
 ```
@@ -60,20 +62,45 @@ cp .env.example .env
 # 编辑 .env，填入你的 DeepSeek API Key
 ```
 
-### 3. 运行
+### 3. 运行、停止和重启
+
+开发模式使用两个终端，后端和前端分别占用一个端口。
+
+终端 A（后端）：
 
 ```bash
+source .venv/bin/activate
 make run
-make web-dev
-# 浏览器打开 http://127.0.0.1:5173
-# 上传 Excel → 输入分析需求 → 查看分步进度 → 查看报告和图表
-# 追问 "再按部门细分" → 不重新上传，直接出新结果
 ```
+
+终端 B（前端）：
+
+```bash
+make web-dev
+```
+
+浏览器打开 `http://127.0.0.1:5173`。后端健康检查地址为
+`http://127.0.0.1:8000/api/health`。
+
+- 停止：分别回到两个终端按 `Ctrl+C`。
+- 重启：再次在终端 A 运行 `make run`，在终端 B 运行 `make web-dev`。
+- 端口占用：先停止旧进程；也可用 `PORT=8001 make run` 临时更换后端端口，并用 `VITE_API_TARGET=http://127.0.0.1:8001 make web-dev` 启动前端。
+
+构建前端后，也可以只启动后端，由 FastAPI 同时提供静态前端：
+
+```bash
+make web-build
+make run
+# 浏览器打开 http://127.0.0.1:8000
+```
+
+上传 Excel 后可输入分析需求、查看分步进度和报告/图表；追问时无需重新上传。当前支持 `.xlsx`、`.xlsm`，默认文件上限为 100 MB。
 
 ### 4. 测试
 
 ```bash
 make test
+make web-build
 ```
 
 ## 项目结构

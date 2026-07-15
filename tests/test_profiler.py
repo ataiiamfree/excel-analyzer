@@ -42,6 +42,47 @@ def test_profiler_detects_deduped_repeated_header_families(tmp_path):
     ]
 
 
+def test_profiler_detects_ordered_header_members_from_lineage(tmp_path):
+    path = tmp_path / "ordered.xlsx"
+    pd.DataFrame(
+        {
+            "Item": ["A", "B"],
+            "Score_1": [10, 40],
+            "Score_2": [20, 50],
+            "Score_3": [30, 60],
+        }
+    ).to_excel(path, index=False)
+    table = NormalizedTable(
+        table_id="Sheet1_t1",
+        source_file="book.xlsx",
+        source_sheet="Sheet1",
+        source_range="A1:D3",
+        parquet_path=str(path),
+        preview_xlsx_path=str(path),
+        columns=[],
+        row_count=2,
+        header_paths={
+            "Item": ["Item"],
+            "Score_1": ["Score", "1"],
+            "Score_2": ["Score", "2"],
+            "Score_3": ["Score", "3"],
+        },
+    )
+
+    families = Profiler().profile([table])["tables"][0]["column_families"]
+
+    assert families == [
+        {
+            "base": "Score",
+            "kind": "ordered_header_members",
+            "columns": ["Score_1", "Score_2", "Score_3"],
+            "member_labels": ["1", "2", "3"],
+            "count": 3,
+            "dtype": "int64",
+        }
+    ]
+
+
 def test_profiler_exposes_header_path_and_keeps_multi_level_columns_ungrouped(tmp_path):
     path = tmp_path / "region_year.xlsx"
     pd.DataFrame(

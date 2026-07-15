@@ -1,15 +1,19 @@
 import { ChangeEvent, FormEvent, KeyboardEvent, useState } from "react";
-import { SendHorizontal, UploadCloud } from "lucide-react";
+import { Menu, SendHorizontal, UploadCloud } from "lucide-react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 
-import { createConversation, fetchConversations } from "../api/http";
+import { createConversation, fetchConversations, validateExcelFile } from "../api/http";
 import Sidebar from "../layout/Sidebar";
+import { useUiStore } from "../store/uiStore";
 
 export default function HomePage() {
   const navigate = useNavigate();
   const [file, setFile] = useState<File | null>(null);
   const [query, setQuery] = useState("");
+  const [fileError, setFileError] = useState("");
+  const mobileSidebarOpen = useUiStore((state) => state.mobileSidebarOpen);
+  const setMobileSidebarOpen = useUiStore((state) => state.setMobileSidebarOpen);
   const conversations = useQuery({ queryKey: ["conversations"], queryFn: fetchConversations });
   const create = useMutation({
     mutationFn: () => {
@@ -25,7 +29,21 @@ export default function HomePage() {
   });
 
   const onFile = (event: ChangeEvent<HTMLInputElement>) => {
-    setFile(event.target.files?.[0] ?? null);
+    const nextFile = event.target.files?.[0] ?? null;
+    if (!nextFile) {
+      setFile(null);
+      setFileError("");
+      return;
+    }
+    try {
+      validateExcelFile(nextFile);
+      setFile(nextFile);
+      setFileError("");
+    } catch (error) {
+      setFile(null);
+      setFileError(error instanceof Error ? error.message : "无法上传该文件");
+      event.target.value = "";
+    }
   };
 
   const submitForm = () => {
@@ -46,8 +64,26 @@ export default function HomePage() {
 
   return (
     <div className="home-shell">
-      <Sidebar groups={conversations.data?.groups ?? []} />
+      <Sidebar
+        groups={conversations.data?.groups ?? []}
+        mobileOpen={mobileSidebarOpen}
+        onNavigate={() => setMobileSidebarOpen(false)}
+      />
+      {mobileSidebarOpen ? (
+        <button
+          className="mobile-backdrop"
+          title="关闭会话列表"
+          onClick={() => setMobileSidebarOpen(false)}
+        />
+      ) : null}
       <main className="home-main">
+        <button
+          className="icon-button mobile-menu home-menu"
+          title="打开会话列表"
+          onClick={() => setMobileSidebarOpen(true)}
+        >
+          <Menu size={18} />
+        </button>
         <h1 className="home-title">
           Chat<em>Excel</em>
         </h1>
@@ -80,7 +116,8 @@ export default function HomePage() {
               <SendHorizontal size={14} />
             </button>
           </div>
-          {create.error ? <p style={{ color: "var(--accent)" }}>{String(create.error.message)}</p> : null}
+          {fileError ? <p className="form-error" role="alert">{fileError}</p> : null}
+          {create.error ? <p className="form-error" role="alert">{create.error.message}</p> : null}
         </form>
       </main>
     </div>

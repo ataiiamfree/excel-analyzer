@@ -164,21 +164,64 @@ class Profiler:
                 continue
 
             consumed.update(siblings)
-            dtype_counts: dict[str, int] = {}
-            for sibling in siblings:
-                dtype = str(by_name[sibling].get("dtype", "?"))
-                dtype_counts[dtype] = dtype_counts.get(dtype, 0) + 1
-            dominant_dtype = max(dtype_counts, key=dtype_counts.get)
             families.append(
                 {
                     "base": name,
                     "kind": "deduped_repeated_header",
                     "columns": siblings,
                     "count": len(siblings),
-                    "dtype": dominant_dtype,
+                    "dtype": self._dominant_dtype(siblings, by_name),
+                }
+            )
+
+        ordered_groups: dict[tuple[str, ...], list[tuple[int, str]]] = {}
+        for column in columns:
+            name = str(column.get("name") or "")
+            path = column.get("header_path") or []
+            if name in consumed or not isinstance(path, list) or len(path) < 2:
+                continue
+            ordinal = self._short_ordinal_label(path[-1])
+            parent = tuple(str(item).strip() for item in path[:-1] if str(item).strip())
+            if ordinal is None or not parent:
+                continue
+            ordered_groups.setdefault(parent, []).append((ordinal, name))
+
+        for parent, members in ordered_groups.items():
+            members.sort(key=lambda item: item[0])
+            ordinals = [ordinal for ordinal, _ in members]
+            if len(members) < 2 or ordinals != list(range(1, len(members) + 1)):
+                continue
+            names = [name for _, name in members]
+            consumed.update(names)
+            families.append(
+                {
+                    "base": parent[-1],
+                    "kind": "ordered_header_members",
+                    "columns": names,
+                    "member_labels": [str(ordinal) for ordinal in ordinals],
+                    "count": len(names),
+                    "dtype": self._dominant_dtype(names, by_name),
                 }
             )
         return families
+
+    def _short_ordinal_label(self, value: Any) -> int | None:
+        text = str(value or "").strip()
+        if not re.fullmatch(r"[1-9]\d?", text):
+            return None
+        ordinal = int(text)
+        return ordinal if ordinal <= 20 else None
+
+    def _dominant_dtype(
+        self,
+        names: list[str],
+        by_name: dict[str, dict[str, Any]],
+    ) -> str:
+        dtype_counts: dict[str, int] = {}
+        for name in names:
+            dtype = str(by_name[name].get("dtype", "?"))
+            dtype_counts[dtype] = dtype_counts.get(dtype, 0) + 1
+        return max(dtype_counts, key=dtype_counts.get)
 
     def _dedupe_suffix(self, name: str) -> int | None:
         match = re.match(r"^.+_([2-9]\d*)$", name)

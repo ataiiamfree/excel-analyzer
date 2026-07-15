@@ -23,8 +23,8 @@
 - Phase 5: 执行引擎（Sandbox + ResultChecker + Orchestrator）✅
 - Phase 6: Adaptive Plan-Execute 动态调整 ✅
 - Phase 7: Reporter 报告生成 ✅
-- Phase 8: Chainlit 交互层 + Session + Memory ✅
-- Phase 9: 加固与测试（待开始）
+- Phase 8: FastAPI + WebSocket + React 交互层、Session、Memory ✅
+- Phase 9: v0.9 MVP 加固、错误边界与回归测试 ✅
 
 ## 当前架构口径
 
@@ -35,4 +35,4 @@
 - 通过 `TaskContext + Artifact Manifest` 管理步骤间信息。
 - 通过 `ResultChecker` 校验”代码跑通但结果不对”的风险。
 - 通过 `Session` 管理追问复用，`Memory` 存储跨会话 schema 指纹。
-- 通过 Chainlit 提供 Web 聊天界面。
+- 通过 FastAPI + WebSocket 提供 API，通过 React/Vite 提供 Web 聊天界面。

@@ -88,7 +88,7 @@ class PlanStepPayload(BaseModel):
 
 class StepRecordPayload(BaseModel):
     step_id: str
-    status: Literal["pending", "running", "done", "failed"] = "pending"
+    status: Literal["pending", "running", "done", "failed", "cancelled"] = "pending"
     started_at: datetime | None = None
     ended_at: datetime | None = None
     stdout: str | None = None

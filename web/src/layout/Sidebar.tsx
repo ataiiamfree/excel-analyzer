@@ -1,5 +1,5 @@
 import { Link, useNavigate } from "react-router-dom";
-import { Plus, Search, Settings, Star } from "lucide-react";
+import { Plus, Search, Star } from "lucide-react";
 import { useMemo, useState } from "react";
 
 import type { ConversationGroup } from "../api/types";
@@ -7,6 +7,8 @@ import type { ConversationGroup } from "../api/types";
 interface SidebarProps {
   activeId?: string;
   groups: ConversationGroup[];
+  mobileOpen?: boolean;
+  onNavigate?: () => void;
 }
 
 function formatTime(value: string) {
@@ -14,7 +16,7 @@ function formatTime(value: string) {
   return date.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
 }
 
-export default function Sidebar({ activeId, groups }: SidebarProps) {
+export default function Sidebar({ activeId, groups, mobileOpen, onNavigate }: SidebarProps) {
   const [query, setQuery] = useState("");
   const navigate = useNavigate();
   const filtered = useMemo(() => {
@@ -33,7 +35,7 @@ export default function Sidebar({ activeId, groups }: SidebarProps) {
   }, [groups, query]);
 
   return (
-    <aside className="sidebar">
+    <aside className={`sidebar ${mobileOpen ? "mobile-open" : ""}`}>
       <div className="brand">
         <div className="brand-mark" />
         <div>
@@ -43,7 +45,10 @@ export default function Sidebar({ activeId, groups }: SidebarProps) {
         </div>
       </div>
 
-      <button className="compose-new" onClick={() => navigate("/")}>
+      <button className="compose-new" onClick={() => {
+        onNavigate?.();
+        navigate("/");
+      }}>
         <Plus size={16} />
         <span>新建分析</span>
         <kbd>N</kbd>
@@ -68,6 +73,7 @@ export default function Sidebar({ activeId, groups }: SidebarProps) {
                 key={conversation.id}
                 to={`/c/${conversation.id}`}
                 className={`chat-item ${conversation.id === activeId ? "active" : ""}`}
+                onClick={onNavigate}
               >
                 <div className="title">{conversation.title}</div>
                 <div className="meta">
@@ -92,9 +98,6 @@ export default function Sidebar({ activeId, groups }: SidebarProps) {
         <div className="user-meta">
           <span className="name">Natalia X.</span>
         </div>
-        <button className="gear" title="设置">
-          <Settings size={15} />
-        </button>
       </div>
     </aside>
   );

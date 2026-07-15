@@ -170,12 +170,30 @@ class ExcelPreprocessor:
         data_end = self._detect_data_end(rows, header_rel)
 
         row_flags = self.classify_rows(rows, header_row=header_rel, data_end=data_end)
+        labeled_context_rows, labeled_context_columns = self._repeating_labeled_context_rows(
+            rows=rows,
+            headers=headers,
+            header_rel=header_rel,
+            data_end=data_end,
+        )
+        if labeled_context_columns:
+            warnings.append(
+                "检测到重复键值分组行，已将 "
+                f"{', '.join(labeled_context_columns)} 下传到后续数值明细行"
+            )
 
         records: list[dict[str, Any]] = []
         current_context_group: str | None = None
+        current_labeled_context: dict[str, Any] = {}
         detected_context_groups = False
         for rel_idx, values in enumerate(rows, start=1):
             if rel_idx <= header_rel:
+                continue
+            if rel_idx in labeled_context_rows:
+                current_labeled_context = {
+                    column: labeled_context_rows[rel_idx].get(column)
+                    for column in labeled_context_columns
+                }
                 continue
             context_label = self._context_group_label(
                 values,
@@ -199,6 +217,7 @@ class ExcelPreprocessor:
                 header: values[index] if index < len(values) else None
                 for index, header in enumerate(headers)
             }
+            record.update(current_labeled_context)
             if detected_context_groups or current_context_group is not None:
                 record["_context_group"] = current_context_group
             record["_source_file"] = file_path.name
@@ -206,7 +225,7 @@ class ExcelPreprocessor:
             record["_source_row"] = min_row + rel_idx - 1
             records.append(record)
 
-        data_columns = list(headers)
+        data_columns = [*headers, *labeled_context_columns]
         if detected_context_groups:
             for record in records:
                 record.setdefault("_context_group", None)
@@ -271,6 +290,99 @@ class ExcelPreprocessor:
             warnings=warnings,
             header_paths=header_paths,
         )
+
+    def _repeating_labeled_context_rows(
+        self,
+        *,
+        rows: list[list[Any]],
+        headers: list[str],
+        header_rel: int,
+        data_end: int,
+    ) -> tuple[dict[int, dict[str, Any]], list[str]]:
+        """Find repeating key/value rows that introduce following numeric detail.
+
+        Report-style workbooks often place entity metadata on a separate row,
+        such as ``User Name: Alice`` followed by one or more metric rows. A row
+        is treated as context only when the same label recurs in another block
+        and numeric detail exists before the next labeled row. Those structural
+        guards keep ordinary flat rows containing colons from being removed.
+        """
+        candidates: dict[int, dict[str, Any]] = {}
+        for rel_idx in range(header_rel + 1, data_end + 1):
+            visible = rows[rel_idx - 1][: len(headers)]
+            if any(isinstance(value, (int, float)) for value in visible):
+                continue
+            pairs = self._extract_labeled_context_pairs(visible)
+            if pairs:
+                candidates[rel_idx] = pairs
+
+        eligible: dict[int, dict[str, Any]] = {}
+        candidate_rows = sorted(candidates)
+        for index, rel_idx in enumerate(candidate_rows):
+            next_rel = candidate_rows[index + 1] if index + 1 < len(candidate_rows) else data_end + 1
+            following = rows[rel_idx : next_rel - 1]
+            if any(
+                any(isinstance(value, (int, float)) for value in row[: len(headers)])
+                for row in following
+            ):
+                eligible[rel_idx] = candidates[rel_idx]
+
+        counts: dict[str, int] = {}
+        first_seen: list[str] = []
+        for pairs in eligible.values():
+            for column, value in pairs.items():
+                if value in (None, ""):
+                    continue
+                counts[column] = counts.get(column, 0) + 1
+                if column not in first_seen:
+                    first_seen.append(column)
+        repeated = [column for column in first_seen if counts.get(column, 0) >= 2]
+        if not repeated:
+            return {}, []
+
+        context_rows = {
+            rel_idx: {column: pairs.get(column) for column in repeated}
+            for rel_idx, pairs in eligible.items()
+            if any(pairs.get(column) not in (None, "") for column in repeated)
+        }
+        return context_rows, repeated
+
+    def _extract_labeled_context_pairs(self, values: list[Any]) -> dict[str, Any]:
+        label_runs: list[tuple[int, int, str]] = []
+        index = 0
+        while index < len(values):
+            column = self._context_column_for_label(values[index])
+            if not column:
+                index += 1
+                continue
+            end = index
+            while end + 1 < len(values) and self._context_column_for_label(values[end + 1]) == column:
+                end += 1
+            label_runs.append((index, end, column))
+            index = end + 1
+
+        pairs: dict[str, Any] = {}
+        for run_index, (_, end, column) in enumerate(label_runs):
+            next_start = label_runs[run_index + 1][0] if run_index + 1 < len(label_runs) else len(values)
+            candidates = [
+                value
+                for value in values[end + 1 : next_start]
+                if value not in (None, "") and self._context_column_for_label(value) is None
+            ]
+            pairs[column] = candidates[0] if candidates else None
+        return pairs
+
+    def _context_column_for_label(self, value: Any) -> str | None:
+        if not isinstance(value, str):
+            return None
+        label = value.strip()
+        if not label.endswith((":", "：")):
+            return None
+        label = label[:-1].strip().casefold()
+        if not label or len(label) > 64:
+            return None
+        safe_label = self._safe_table_id(re.sub(r"\s+", "_", label)).strip("_")
+        return f"_context_{safe_label}" if safe_label else None
 
     def _context_group_label(
         self,

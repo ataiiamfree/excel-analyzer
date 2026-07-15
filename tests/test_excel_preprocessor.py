@@ -390,6 +390,103 @@ def test_context_group_still_detects_first_floor_pattern():
     assert label == "First Floor"
 
 
+def test_process_forward_fills_repeating_key_value_context_rows(tmp_path):
+    workbook_path = tmp_path / "repeating_entity_context.xlsx"
+    workbook = openpyxl.Workbook()
+    ws = workbook.active
+    ws.title = "Sheet1"
+    ws.append(["Label", "Value", "Group Label", "Group", "Metric", "Amount"])
+    ws.append(["User Name:", "Alice 1001", "Department:", "Support", None, None])
+    ws.append(["Queue A", None, None, None, "Chats Serviced", 12])
+    ws.append(["Total", None, None, None, "Chats Serviced", 12])
+    ws.append(["User Name:", "Bob 1002", "Department:", "Sales", None, None])
+    ws.append(["Queue B", None, None, None, "Chats Serviced", 8])
+    ws.append(["Total", None, None, None, "Chats Serviced", 8])
+    workbook.save(workbook_path)
+
+    manifest = {
+        "manifest_path": "workbook_manifest.json",
+        "files": [
+            {
+                "path": str(workbook_path),
+                "sheets": [
+                    {
+                        "name": "Sheet1",
+                        "tables": [
+                            {
+                                "table_id": "Sheet1_t1",
+                                "range": "A1:F7",
+                                "header_candidates": [1],
+                            }
+                        ],
+                    }
+                ],
+            }
+        ],
+    }
+
+    result = ExcelPreprocessor().process(workbook_path, manifest)
+    table = result.tables[0]
+    path = Path(table.parquet_path)
+    dataframe = pd.read_parquet(path) if path.suffix == ".parquet" else pd.read_excel(path)
+
+    assert table.row_count == 4
+    assert dataframe["_context_user_name"].tolist() == [
+        "Alice 1001",
+        "Alice 1001",
+        "Bob 1002",
+        "Bob 1002",
+    ]
+    assert dataframe["_context_department"].tolist() == [
+        "Support",
+        "Support",
+        "Sales",
+        "Sales",
+    ]
+    assert any("重复键值分组行" in warning for warning in table.warnings)
+
+
+def test_repeating_colon_values_with_numeric_data_remain_flat_rows(tmp_path):
+    workbook_path = tmp_path / "flat_colon_values.xlsx"
+    workbook = openpyxl.Workbook()
+    ws = workbook.active
+    ws.title = "Sheet1"
+    ws.append(["Event", "Value", "Notes"])
+    ws.append(["Status:", 10, "ok"])
+    ws.append(["Status:", 20, "ok"])
+    workbook.save(workbook_path)
+
+    manifest = {
+        "manifest_path": "workbook_manifest.json",
+        "files": [
+            {
+                "path": str(workbook_path),
+                "sheets": [
+                    {
+                        "name": "Sheet1",
+                        "tables": [
+                            {
+                                "table_id": "Sheet1_t1",
+                                "range": "A1:C3",
+                                "header_candidates": [1],
+                            }
+                        ],
+                    }
+                ],
+            }
+        ],
+    }
+
+    result = ExcelPreprocessor().process(workbook_path, manifest)
+    table = result.tables[0]
+    path = Path(table.parquet_path)
+    dataframe = pd.read_parquet(path) if path.suffix == ".parquet" else pd.read_excel(path)
+
+    assert table.row_count == 2
+    assert dataframe["Event"].tolist() == ["Status:", "Status:"]
+    assert not any(column.startswith("_context_") for column in dataframe.columns)
+
+
 def test_merge_multi_level_headers_returns_lineage():
     preprocessor = ExcelPreprocessor()
     rows = [
@@ -706,6 +803,85 @@ def test_ingest_then_process_preserves_multi_level_lineage_end_to_end(tmp_path):
     # And the metadata surfaces it downstream
     fund_meta = next(c for c in table.columns if c["name"] == fund_col)
     assert fund_meta["header_path"] == ["Total Fundraising", "£(000)", "2008/09"]
+
+
+def test_ingest_then_process_retains_group_columns_after_numeric_preamble(tmp_path):
+    from app.tools.workbook_ingestor import WorkbookIngestor
+
+    workbook_path = tmp_path / "matrix_header.xlsx"
+    workbook = openpyxl.Workbook()
+    ws = workbook.active
+    ws.title = "Matrix"
+
+    ws.append(["Quarterly operating matrix", None, None, None, None, None])
+    ws.append([None, 301, 302, 303, 304, 305])
+    ws.append([None, "North", None, "South", None, "TOTAL"])
+    ws.merge_cells("B3:C3")
+    ws.merge_cells("D3:E3")
+    ws.merge_cells("F3:F6")
+    ws.append([None, "=1+1", "=1+2", "=1+3", "=1+4", None])
+    ws.append([None, "=10+1", "=10+2", "=10+3", "=10+4", None])
+    ws.append(["Metric", "Retail", "Online", "Retail", "Online", None])
+    ws.append(["Revenue", 10, 20, 30, 40, 100])
+    ws.append(["Cost", 4, 8, 12, 16, 40])
+    workbook.save(workbook_path)
+
+    manifest = WorkbookIngestor().scan(workbook_path)
+    table = ExcelPreprocessor().process(workbook_path, manifest).tables[0]
+    normalized_path = Path(table.parquet_path)
+    normalized = (
+        pd.read_parquet(normalized_path)
+        if normalized_path.suffix == ".parquet"
+        else pd.read_excel(normalized_path)
+    )
+
+    assert "TOTAL" in normalized.columns
+    revenue = normalized[
+        normalized[normalized.columns[0]].astype(str).str.strip().eq("Revenue")
+    ]
+    assert len(revenue) == 1
+    assert revenue.iloc[0]["TOTAL"] == 100
+    assert table.header_paths["TOTAL"] == ["TOTAL"]
+
+
+def test_ingest_then_process_preserves_ordered_leaf_header_lineage(tmp_path):
+    workbook_path = tmp_path / "ordered_header.xlsx"
+    workbook = openpyxl.Workbook()
+    ws = workbook.active
+    ws.title = "Ordered"
+
+    ws.append(["Results", None, None, None, None, None, None])
+    ws.append([None, None, None, None, None, None, None])
+    ws.append(["Item", "Score", None, None, "Rate", None, None])
+    ws.merge_cells("A3:A4")
+    ws.merge_cells("B3:D3")
+    ws.merge_cells("E3:G3")
+    ws.append([None, 1, 2, 3, 1, 2, 3])
+    ws.append(["A", 10, 20, 30, 0.1, 0.2, 0.3])
+    ws.append(["B", 40, 50, 60, 0.4, 0.5, 0.6])
+    workbook.save(workbook_path)
+
+    manifest = WorkbookIngestor().scan(workbook_path)
+    table = ExcelPreprocessor().process(workbook_path, manifest).tables[0]
+    normalized_path = Path(table.parquet_path)
+    normalized = (
+        pd.read_parquet(normalized_path)
+        if normalized_path.suffix == ".parquet"
+        else pd.read_excel(normalized_path)
+    )
+
+    assert list(normalized.columns[:7]) == [
+        "Item",
+        "Score_1",
+        "Score_2",
+        "Score_3",
+        "Rate_1",
+        "Rate_2",
+        "Rate_3",
+    ]
+    assert len(normalized) == 2
+    assert table.header_paths["Score_3"] == ["Score", "3"]
+    assert table.header_paths["Rate_2"] == ["Rate", "2"]
 
 
 def test_process_populates_trivial_header_path_for_single_level_tables(tmp_path):

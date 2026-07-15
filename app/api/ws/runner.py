@@ -35,6 +35,7 @@ from app.workspace import Workspace
 
 
 EventSender = Callable[[dict[str, Any]], Awaitable[None]]
+MAX_PERSISTED_REASONING_CHARS = 20_000
 
 
 class EventEmitter:
@@ -79,6 +80,15 @@ def initial_payload(query: str, started_at: datetime) -> dict[str, Any]:
         "artifact_ids": [],
         "metrics": {"started_at": started_at.isoformat()},
     }
+
+
+def classify_run_error(exc: Exception) -> str:
+    if isinstance(exc, (asyncio.TimeoutError, TimeoutError)):
+        return "timeout"
+    text = f"{type(exc).__name__}: {exc}".lower()
+    if "429" in text or "rate limit" in text or "too many requests" in text:
+        return "rate_limit"
+    return "other"
 
 
 def output_path_for_file(workspace: Workspace, file_path: str) -> tuple[Path, str]:
@@ -247,7 +257,7 @@ async def _run_query(
         if not token:
             return
         reasoning = payload.setdefault("reasoning", {"text": "", "tokens": 0})
-        reasoning["text"] = (reasoning.get("text") or "") + token
+        reasoning["text"] = ((reasoning.get("text") or "") + token)[-MAX_PERSISTED_REASONING_CHARS:]
         reasoning["tokens"] = int(reasoning.get("tokens") or 0) + max(1, len(token) // 4)
         await emitter.emit(ReasoningDeltaEvent(seq=0, delta=token))
 
@@ -305,25 +315,53 @@ async def _run_query(
             timeout=config.run_timeout_seconds,
         )
     except asyncio.CancelledError:
+        ended_at = utc_now()
+        for record in payload["steps"]:
+            if record["status"] == "running":
+                record.update({"status": "cancelled", "ended_at": ended_at.isoformat()})
         payload["status"] = "cancelled"
+        payload["metrics"].update(
+            {
+                "duration_ms": int((ended_at - started_at).total_seconds() * 1000),
+                "ended_at": ended_at.isoformat(),
+                "user_message_id": user_message_id,
+            }
+        )
         await persist_payload()
         await emitter.emit(CancelledEvent(seq=0))
         raise
     except Exception as exc:
+        ended_at = utc_now()
+        duration_ms = int((ended_at - started_at).total_seconds() * 1000)
+        error_kind = classify_run_error(exc)
         payload["status"] = "failed"
         payload["error"] = {
             "failed_step_description": "",
             "summary": f"{type(exc).__name__}: {exc}",
+            "kind": error_kind,
         }
+        payload["metrics"].update(
+            {
+                "duration_ms": duration_ms,
+                "ended_at": ended_at.isoformat(),
+                "user_message_id": user_message_id,
+            }
+        )
         await persist_payload()
         await emitter.emit(
             RunFailedEvent(
                 seq=0,
                 failed_step_description="",
                 error_summary=payload["error"]["summary"],
+                error_kind=error_kind,
             )
         )
-        raise
+        return RunResult(
+            **payload,
+            run_id=run_id,
+            conversation_id=conversation_id,
+            artifacts=[],
+        )
 
     ended_at = utc_now()
     duration_ms = int((ended_at - started_at).total_seconds() * 1000)
@@ -385,14 +423,8 @@ async def _run_query(
         payload["error"] = {
             "failed_step_description": task_result.failed_step_description,
             "summary": task_result.error_summary,
+            "kind": "analysis_failed",
         }
-        await emitter.emit(
-            RunFailedEvent(
-                seq=0,
-                failed_step_description=task_result.failed_step_description,
-                error_summary=task_result.error_summary,
-            )
-        )
     await persist_payload()
     result = RunResult(
         **payload,
@@ -400,14 +432,24 @@ async def _run_query(
         conversation_id=conversation_id,
         artifacts=[RunArtifact(**artifact) for artifact in artifacts],
     )
-    await emitter.emit(
-        RunCompleteEvent(
-            seq=0,
-            message_id=assistant_message_id,
-            report=payload["report"],
-            file_ids=artifact_ids,
-            duration_ms=duration_ms,
-            result=result,
+    if task_result.failed:
+        await emitter.emit(
+            RunFailedEvent(
+                seq=0,
+                failed_step_description=task_result.failed_step_description,
+                error_summary=task_result.error_summary,
+                error_kind="analysis_failed",
+            )
         )
-    )
+    else:
+        await emitter.emit(
+            RunCompleteEvent(
+                seq=0,
+                message_id=assistant_message_id,
+                report=payload["report"],
+                file_ids=artifact_ids,
+                duration_ms=duration_ms,
+                result=result,
+            )
+        )
     return result

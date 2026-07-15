@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Download } from "lucide-react";
+import { Download, X } from "lucide-react";
 
 import type { Artifact } from "../api/types";
 import { useUiStore } from "../store/uiStore";
@@ -14,6 +14,7 @@ interface ArtifactPanelProps {
 export default function ArtifactPanel({ artifacts }: ArtifactPanelProps) {
   const [tab, setTab] = useState<"preview" | "files" | "code">("preview");
   const activeArtifactId = useUiStore((state) => state.activeArtifactId);
+  const setArtifactPanelOpen = useUiStore((state) => state.setArtifactPanelOpen);
   const previewArtifacts = useMemo(
     () => artifacts.filter(isPreviewArtifact),
     [artifacts]
@@ -46,6 +47,9 @@ export default function ArtifactPanel({ artifacts }: ArtifactPanelProps) {
     <aside className="panel">
       <div className="panel-head">
         <span className="title">产物预览</span>
+        <button className="icon-button panel-close" title="关闭产物面板" onClick={() => setArtifactPanelOpen(false)}>
+          <X size={16} />
+        </button>
       </div>
       <div className="tabs">
         <button className={`tab ${tab === "preview" ? "active" : ""}`} onClick={() => setTab("preview")}>

@@ -260,7 +260,33 @@ def test_profile_prompt_includes_repeated_column_families():
     assert "column_families" in prompt
     assert "press(deduped_repeated_header)=[press, press_2, press_3]" in prompt
     assert "不要默认取第一个" in prompt
+    assert "当前问题命中列族 `press`: [press, press_2, press_3]" in prompt
+    assert "不得只访问未带后缀的第一个成员" in prompt
+    assert "不要预设 max/min" in prompt
     assert "最佳有效" not in prompt
+
+
+def test_python_task_hint_does_not_name_unrelated_column_family():
+    profile = {
+        "tables": [
+            {
+                "column_families": [
+                    {
+                        "base": "measurement",
+                        "columns": ["measurement", "measurement_2", "measurement_3"],
+                    }
+                ]
+            }
+        ]
+    }
+
+    hints = PromptAssembler()._format_python_task_hints(
+        profile,
+        "Which department has the highest revenue?",
+    )
+
+    assert "`column_families` 表示同一逻辑字段" in hints
+    assert "当前问题命中列族 `measurement`" not in hints
 
 
 def test_profile_prompt_explains_context_group_columns():
@@ -587,4 +613,39 @@ def test_repair_prompt_includes_stdout_and_check_guidance():
     assert "不要只修格式" in prompt
     assert "Final Answer" in prompt
     assert "禁止用 primary/main/first column" in prompt
+    assert "normalized exact 命中存在" in prompt
+    assert "不要对同时包含明细、小计和总计的整列再次求和" in prompt
     assert "_context_group" not in prompt
+
+
+def test_python_prompt_prefers_explicit_total_row_over_resumming_total_column():
+    step = Step(
+        id="s1",
+        tool="python",
+        description="Calculate overall revenue",
+        instruction="What is the total revenue?",
+    )
+    context = TaskContext(
+        task_id="t1",
+        user_query="What is the total revenue?",
+        workbook_manifest={},
+        data_profile={
+            "tables": [
+                {
+                    "table_id": "Sheet1_t1",
+                    "path": "normalized/Sheet1_t1.parquet",
+                    "columns_detail": [
+                        {"name": "Metric", "dtype": "object"},
+                        {"name": "TOTAL", "dtype": "float64"},
+                    ],
+                }
+            ]
+        },
+        plan=ExecutionPlan([step]),
+    )
+
+    prompt = PromptAssembler().assemble(context, step)
+
+    assert "normalized exact 命中存在" in prompt
+    assert "显式汇总行和总计列" in prompt
+    assert "只有不存在显式汇总行时，才汇总互斥的明细行" in prompt

@@ -41,7 +41,10 @@ class PromptAssembler:
         check_report: str | None = None,
         stdout: str | None = None,
     ) -> str:
-        task_hints = self._format_python_task_hints(context.data_profile)
+        task_hints = self._format_python_task_hints(
+            context.data_profile,
+            context.user_query,
+        )
         parts = [
             "代码执行或结果校验失败，请修正。只输出完整 Python 脚本，不要解释。\n"
             "重要：如果报错是 ModuleNotFoundError（模块未安装），你必须改用已安装的库来实现同样的功能，"
@@ -51,6 +54,11 @@ class PromptAssembler:
             (
                 "如果这是结果校验失败而不是 Python 异常，不要只修格式；必须根据 stdout、数据概况和列名重新检查"
                 "筛选条件、列选择、聚合口径和空结果原因。问答类任务最后必须打印一行 `Final Answer: ...`。"
+                "匹配行标签时，若 normalized exact 命中存在，必须优先于 contains/fuzzy；"
+                "不得让较短或部分命中的标签覆盖完整标签。"
+                "如果问题要求 total/overall/总计，且表中已有语义对应的显式汇总行和总计列，"
+                "应取该行与该列的交叉值；不要对同时包含明细、小计和总计的整列再次求和。"
+                "只有不存在显式汇总行时，才汇总互斥的明细行。"
                 "如果筛选得到 0 行或答案为 0/空值，先检查条件是否其实出现在列名、重复列族或父级/分组行上下文中，"
                 "并在 stdout 中打印候选列、候选行和最终选择依据。"
                 "如果校验信息提到重复表头列族，且用户没有明确指定第几列/第几次，禁止用 primary/main/first column "
@@ -127,7 +135,10 @@ class PromptAssembler:
             ),
             PromptSection(
                 "task_hints",
-                self._format_python_task_hints(context.data_profile)
+                self._format_python_task_hints(
+                    context.data_profile,
+                    context.user_query,
+                )
                 if current_step.tool == "python"
                 else "",
                 True,
@@ -288,6 +299,18 @@ class PromptAssembler:
         """Return conditional structural hints shared by planner and executor."""
         return self._format_profile_hints(profile)
 
+    def format_query_matched_column_family_hints_for_prompt(
+        self,
+        profile: dict[str, Any],
+        user_query: str,
+    ) -> str:
+        """Return only column-family guidance that is relevant to this query."""
+        tables = profile.get("tables", []) if isinstance(profile, dict) else []
+        lines = self._query_matched_column_family_hint_lines(tables, user_query)
+        if not lines:
+            return ""
+        return "## 当前问题相关列族\n" + "\n".join(f"- {line}" for line in lines)
+
     def _compact_columns(self, table: dict[str, Any]) -> list[str]:
         columns: list[str] = []
         for item in table.get("columns_detail") or []:
@@ -395,7 +418,11 @@ class PromptAssembler:
             )
         return "\n".join(lines)
 
-    def _format_python_task_hints(self, profile: dict[str, Any]) -> str:
+    def _format_python_task_hints(
+        self,
+        profile: dict[str, Any],
+        user_query: str = "",
+    ) -> str:
         tables = profile.get("tables", []) if isinstance(profile, dict) else []
         if not tables:
             return ""
@@ -415,6 +442,9 @@ class PromptAssembler:
                     "如果用户没有明确指定第几列/第几次，stdout 中应打印候选列和选择依据。",
                 ]
             )
+            lines.extend(
+                self._query_matched_column_family_hint_lines(tables, user_query)
+            )
         if self._has_rate_columns(tables):
             lines.append(
                 "处理 rate/ratio/percentage/growth 字段时，不要仅因为数值绝对值大于 1 就除以 100；只有列名/单位明确含 % 或样例显示 whole-percent 口径时才转换。"
@@ -429,6 +459,47 @@ class PromptAssembler:
         if not lines:
             return ""
         return "## Python 任务提示\n" + "\n".join(f"- {line}" for line in lines)
+
+    def _query_matched_column_family_hint_lines(
+        self,
+        tables: list[dict[str, Any]],
+        user_query: str,
+    ) -> list[str]:
+        lines: list[str] = []
+        for base, columns in self._query_matched_column_families(tables, user_query):
+            column_text = ", ".join(columns[:8])
+            suffix = ", ..." if len(columns) > 8 else ""
+            lines.append(
+                f"当前问题命中列族 `{base}`: [{column_text}{suffix}]。"
+                "计划和生成代码必须保留并读取全部成员，再按用户指定的序号/标签或表格语义选择；"
+                "不得只访问未带后缀的第一个成员，也不要预设 max/min。"
+            )
+        return lines
+
+    def _query_matched_column_families(
+        self,
+        tables: list[dict[str, Any]],
+        user_query: str,
+    ) -> list[tuple[str, list[str]]]:
+        query = str(user_query or "").casefold()
+        if not query:
+            return []
+        matches: list[tuple[str, list[str]]] = []
+        seen: set[tuple[str, tuple[str, ...]]] = set()
+        for table in tables:
+            for family in table.get("column_families") or []:
+                base = str(family.get("base") or "").strip()
+                columns = [str(item) for item in family.get("columns") or [] if item]
+                if len(base) < 2 or len(columns) < 2:
+                    continue
+                if not re.search(rf"(?<!\w){re.escape(base.casefold())}(?!\w)", query):
+                    continue
+                key = (base.casefold(), tuple(columns))
+                if key in seen:
+                    continue
+                seen.add(key)
+                matches.append((base, columns))
+        return matches
 
     def _has_context_columns(self, tables: list[dict[str, Any]]) -> bool:
         return any(
@@ -533,6 +604,11 @@ class PromptAssembler:
                 "查询/问答类任务必须在 stdout 最后打印一行 `Final Answer: ...`。"
                 "筛选文本字段时不要只依赖 == 精确匹配；必须按 exact、strip/casefold normalized exact、contains、"
                 "difflib fuzzy candidates 的顺序回退。"
+                "匹配行标签时，若 normalized exact 命中存在，必须优先于 contains/fuzzy；"
+                "不得让较短或部分命中的标签覆盖完整标签。"
+                "如果问题要求 total/overall/总计，且表中已有语义对应的显式汇总行和总计列，"
+                "应取该行与该列的交叉值；不要对同时包含明细、小计和总计的整列再次求和。"
+                "只有不存在显式汇总行时，才汇总互斥的明细行。"
                 "如果 exact 匹配为 0 行，不要直接输出 Not Found/N/A；必须打印候选值、尝试包含或模糊匹配后再决定。"
                 "当用户询问哪些项目、措施、items、list、all、compare 多个对象时，输出全部匹配项，不要只取第一行。"
                 "当用户询问单个命名项目/产品/工程项的数值时，优先定位该项目行；父级/楼层/分组行只作为上下文，"

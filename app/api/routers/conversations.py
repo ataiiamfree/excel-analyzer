@@ -23,13 +23,11 @@ from app.api.schemas import (
 )
 from app.api.ws.runner import artifact_out
 from app.api.ws.runner import run_conversation_query
+from app.api.uploads import save_validated_excel
 from app.config import Config
 from app.workspace import Workspace
 
 router = APIRouter(prefix="/api/conversations", tags=["conversations"])
-
-EXCEL_EXTENSIONS = {".xlsx", ".xlsm"}
-
 
 def title_for_query(query: str | None, file_name: str | None) -> str:
     raw = (query or "").strip() or (file_name or "新的 Excel 分析")
@@ -62,31 +60,19 @@ def grouped(conversations: list[dict]) -> ConversationListOut:
     )
 
 
-def profile_workbook(path: Path) -> tuple[int | None, int | None]:
-    try:
-        import openpyxl
-
-        workbook = openpyxl.load_workbook(path, read_only=True, data_only=True)
-        sheet_count = len(workbook.sheetnames)
-        row_count = sum(workbook[sheet].max_row or 0 for sheet in workbook.sheetnames)
-        workbook.close()
-        return sheet_count, row_count
-    except Exception:
-        return None, None
-
-
-def save_upload_to_workspace(upload: UploadFile, conversation_id: str, config: Config) -> tuple[str, int]:
-    suffix = Path(upload.filename or "").suffix.lower()
-    if suffix not in EXCEL_EXTENSIONS:
-        raise HTTPException(status_code=400, detail="目前请上传 .xlsx 或 .xlsm 文件")
+def save_upload_to_workspace(
+    upload: UploadFile,
+    conversation_id: str,
+    config: Config,
+) -> tuple[str, int, int, int]:
     workspace = Workspace(root=config.workspace_dir, task_id=conversation_id)
     target = Path(workspace.path) / "raw" / Path(upload.filename or "upload.xlsx").name
-    size = 0
-    with target.open("wb") as fh:
-        while chunk := upload.file.read(1024 * 1024):
-            size += len(chunk)
-            fh.write(chunk)
-    return str(target.resolve()), size
+    size, sheet_count, row_count = save_validated_excel(
+        upload,
+        target,
+        max_size_mb=config.max_file_size_mb,
+    )
+    return str(target.resolve()), size, sheet_count, row_count
 
 
 @router.get("", response_model=ConversationListOut)
@@ -103,8 +89,11 @@ async def create_conversation(
     sessions: SessionRegistry = Depends(get_session_registry),
 ) -> ConversationOut:
     conversation_id = uuid.uuid4().hex
-    file_path, file_size = save_upload_to_workspace(file, conversation_id, config)
-    sheet_count, row_count = profile_workbook(Path(file_path))
+    try:
+        file_path, file_size, sheet_count, row_count = save_upload_to_workspace(file, conversation_id, config)
+    except HTTPException:
+        shutil.rmtree(Path(config.workspace_dir) / conversation_id, ignore_errors=True)
+        raise
     row = store.create_conversation(
         conversation_id=conversation_id,
         title=title_for_query(query, file.filename),
@@ -189,25 +178,17 @@ async def replace_file(
         store.get_conversation(conversation_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="会话不存在") from exc
-    file_path, file_size = save_upload_to_workspace(file, conversation_id, config)
-    sheet_count, row_count = profile_workbook(Path(file_path))
+    file_path, file_size, sheet_count, row_count = save_upload_to_workspace(file, conversation_id, config)
     row = store.update_conversation(
         conversation_id,
-        title=file.filename or "新的 Excel 分析",
+        file_name=file.filename,
+        file_size=file_size,
+        local_file_path=file_path,
         sheet_count=sheet_count,
         row_count=row_count,
     )
-    with store._lock, store._conn:
-        store._conn.execute(
-            """
-            UPDATE conversations
-            SET file_name = ?, file_size = ?, local_file_path = ?, updated_at = ?
-            WHERE id = ?
-            """,
-            (file.filename, file_size, file_path, utc_now_iso(), conversation_id),
-        )
     sessions.replace_file(conversation_id, file_path)
-    return ConversationOut(**store.get_conversation(conversation_id))
+    return ConversationOut(**row)
 
 
 @router.post("/{conversation_id}/runs")

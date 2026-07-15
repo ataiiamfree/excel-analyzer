@@ -143,3 +143,95 @@ def test_scan_ignores_single_value_title_row(tmp_path):
 
     # Row 1 title is rejected; the real single-level header at row 3 is picked.
     assert table["header_candidates"] == [3]
+
+
+def test_scan_deep_header_cap_preserves_leaf_row(tmp_path):
+    workbook_path = tmp_path / "deep_header.xlsx"
+    workbook = openpyxl.Workbook()
+    ws = workbook.active
+    ws.title = "Sheet1"
+
+    for level in range(1, 7):
+        ws.append([f"Group {level}A", f"Group {level}B"])
+    ws.append(["Item", "Amount"])
+    ws.append(["A", 100])
+    workbook.save(workbook_path)
+
+    manifest = WorkbookIngestor().scan(workbook_path)
+    table = manifest["files"][0]["sheets"][0]["tables"][0]
+
+    assert table["header_candidates"] == [2, 3, 4, 5, 6, 7]
+
+
+def test_scan_skips_numeric_preamble_before_formula_backed_group_header(tmp_path):
+    workbook_path = tmp_path / "matrix_preamble.xlsx"
+    workbook = openpyxl.Workbook()
+    ws = workbook.active
+    ws.title = "Matrix"
+
+    ws.append(["Quarterly operating matrix", None, None, None, None, None])
+    ws.append([None, 301, 302, 303, 304, 305])
+    ws.append([None, "North", None, "South", None, "TOTAL"])
+    ws.merge_cells("B3:C3")
+    ws.merge_cells("D3:E3")
+    ws.merge_cells("F3:F6")
+    ws.append(
+        [
+            None,
+            '=IF(1=1,"x","")',
+            '=IF(1=1,"x","")',
+            '=IF(1=1,"x","")',
+            '=IF(1=1,"x","")',
+            None,
+        ]
+    )
+    ws.append([None, "=10+1", "=10+2", "=10+3", "=10+4", None])
+    ws.append(["Metric", "Retail", "Online", "Retail", "Online", None])
+    ws.append(["Revenue", "=5+5", "=10+10", "=15+15", "=20+20", "=50+50"])
+    ws.append(["Cost", 4, 8, 12, 16, 40])
+    workbook.save(workbook_path)
+
+    manifest = WorkbookIngestor().scan(workbook_path)
+    table = manifest["files"][0]["sheets"][0]["tables"][0]
+
+    assert table["header_candidates"] == [3]
+
+
+def test_scan_stops_at_numeric_data_after_single_level_header(tmp_path):
+    workbook_path = tmp_path / "flat_with_text_row.xlsx"
+    workbook = openpyxl.Workbook()
+    ws = workbook.active
+    ws.title = "Flat"
+
+    ws.append(["Item", "Value A", "Value B", "Value C", "Flag A", "Flag B", "Flag C"])
+    ws.append(["A", 1, 2, 3, 1, 2, 3])
+    ws.append(["B", 10, 20, 30, 40, 50, 60])
+    workbook.save(workbook_path)
+
+    manifest = WorkbookIngestor().scan(workbook_path)
+    table = manifest["files"][0]["sheets"][0]["tables"][0]
+
+    assert table["header_candidates"] == [1]
+
+
+def test_scan_detects_repeated_ordinal_leaf_under_merged_groups(tmp_path):
+    workbook_path = tmp_path / "ordered_header.xlsx"
+    workbook = openpyxl.Workbook()
+    ws = workbook.active
+    ws.title = "Ordered"
+
+    ws.append(["Results", None, None, None, None, None, None])
+    ws.append([None, None, None, None, None, None, None])
+    ws.append(["Item", "Score", None, None, "Rate", None, None])
+    ws.merge_cells("A3:A4")
+    ws.merge_cells("B3:D3")
+    ws.merge_cells("E3:G3")
+    ws.append([None, 1, 2, 3, 1, 2, 3])
+    ws.append(["A", 10, 20, 30, 0.1, 0.2, 0.3])
+    ws.append(["B", 40, 50, 60, 0.4, 0.5, 0.6])
+    workbook.save(workbook_path)
+
+    manifest = WorkbookIngestor().scan(workbook_path)
+    table = manifest["files"][0]["sheets"][0]["tables"][0]
+
+    assert table["header_candidates"] == [3, 4]

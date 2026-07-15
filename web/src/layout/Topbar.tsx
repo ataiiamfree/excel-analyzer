@@ -1,7 +1,5 @@
-import { PanelRightClose, PanelRightOpen, Star } from "lucide-react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { Menu, PanelRightClose, PanelRightOpen } from "lucide-react";
 
-import { updateConversation } from "../api/http";
 import type { Conversation } from "../api/types";
 import { useUiStore } from "../store/uiStore";
 
@@ -13,29 +11,21 @@ interface TopbarProps {
 export default function Topbar({ conversation, artifactCount }: TopbarProps) {
   const artifactPanelOpen = useUiStore((state) => state.artifactPanelOpen);
   const setArtifactPanelOpen = useUiStore((state) => state.setArtifactPanelOpen);
-  const queryClient = useQueryClient();
-  const star = useMutation({
-    mutationFn: () =>
-      conversation
-        ? updateConversation(conversation.id, { starred: !conversation.starred })
-        : Promise.resolve(undefined),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["conversations"] });
-      if (conversation) {
-        queryClient.invalidateQueries({ queryKey: ["conversation", conversation.id] });
-      }
-    }
-  });
+  const setMobileSidebarOpen = useUiStore((state) => state.setMobileSidebarOpen);
 
   return (
     <div className="topbar">
+      <button
+        className="icon-button mobile-menu"
+        title="打开会话列表"
+        onClick={() => setMobileSidebarOpen(true)}
+      >
+        <Menu size={17} />
+      </button>
       <h1 className="topbar-title serif">{conversation?.title ?? "新的 Excel 分析"}</h1>
       {conversation ? (
         <div className="topbar-actions">
-          <span className="topbar-meta">{artifactCount} artifacts</span>
-          <button className="icon-button" title="收藏" onClick={() => star.mutate()}>
-            <Star size={16} fill={conversation.starred ? "currentColor" : "none"} />
-          </button>
+          <span className="topbar-meta">{artifactCount} 个产物</span>
           <button
             className="icon-button"
             title={artifactPanelOpen ? "隐藏产物面板" : "打开产物面板"}

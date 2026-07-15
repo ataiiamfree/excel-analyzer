@@ -214,12 +214,16 @@ class WorkbookIngestor:
             # string quoting still get picked up.
             text_like = [
                 v for v in non_empty
-                if isinstance(v, str) or self._is_year_like_int(v)
+                if (isinstance(v, str) and not self._is_formula(v))
+                or self._is_year_like_int(v)
             ]
             data_values = [
                 v for v in non_empty
-                if isinstance(v, (int, float, datetime.date, datetime.datetime))
-                and not self._is_year_like_int(v)
+                if (
+                    isinstance(v, (int, float, datetime.date, datetime.datetime))
+                    and not self._is_year_like_int(v)
+                )
+                or self._is_formula(v)
             ]
             unique_texts = {
                 str(v).strip()
@@ -237,14 +241,33 @@ class WorkbookIngestor:
             }
 
         found_first = False
-        for row_idx in range(min_row, scan_end + 1):
+        row_idx = min_row
+        while row_idx <= scan_end:
             sig = row_signals[row_idx]
             if sig["blank"]:
                 if found_first:
                     break
+                row_idx += 1
                 continue
             if sig["data_count"] > 0:
-                # First row carrying real data → end of the header search.
+                if not found_first:
+                    # Numeric report metadata can precede the real header.
+                    # Keep scanning until a credible text header appears.
+                    row_idx += 1
+                    continue
+                if self._is_repeated_ordinal_leaf_header(
+                    worksheet,
+                    row_idx=row_idx,
+                    previous_header_row=candidates[-1],
+                    scan_end=scan_end,
+                    min_col=min_col,
+                    max_col=max_col,
+                    row_signals=row_signals,
+                ):
+                    candidates.append(row_idx)
+                    row_idx += 1
+                    continue
+                # First real data row after the header block ends the search.
                 break
             base_header_like = (
                 sig["density"] >= 0.4
@@ -267,6 +290,7 @@ class WorkbookIngestor:
                 # so per-cell annotations reach the leaf lineage, but do not
                 # advance found_first blocks — subsequent primaries handle it.
                 candidates.append(row_idx)
+            row_idx += 1
 
         # Backward extension: sparse parent-group rows (e.g. `Landings into` in
         # one cell, `Total landings` in another) are below the density
@@ -288,12 +312,80 @@ class WorkbookIngestor:
                     break
                 candidates.insert(0, row_idx)
 
-        return candidates[:6] or [min_row]
+        # Cap very deep report headers without discarding the leaf row. The
+        # leaf carries the actual field names; clipping from the end would keep
+        # distant report metadata while turning the leaf into a data record.
+        return candidates[-6:] or [min_row]
 
     def _is_year_like_int(self, value: Any) -> bool:
         if not isinstance(value, int) or isinstance(value, bool):
             return False
         return 1900 <= value <= 2100
+
+    def _is_formula(self, value: Any) -> bool:
+        return isinstance(value, str) and value.lstrip().startswith("=")
+
+    def _is_repeated_ordinal_leaf_header(
+        self,
+        worksheet: Any,
+        *,
+        row_idx: int,
+        previous_header_row: int,
+        scan_end: int,
+        min_col: int,
+        max_col: int,
+        row_signals: dict[int, dict[str, Any]],
+    ) -> bool:
+        """Return true for repeated 1..N leaves under merged parent groups."""
+        if row_idx + 1 > scan_end:
+            return False
+        raw_values = [
+            worksheet.cell(row_idx, col_idx).value
+            for col_idx in range(min_col, max_col + 1)
+        ]
+        ordinal_cells = [
+            (min_col + offset, value)
+            for offset, value in enumerate(raw_values)
+            if value not in (None, "")
+        ]
+        if len(ordinal_cells) < 4 or any(
+            not isinstance(value, int) or isinstance(value, bool)
+            for _, value in ordinal_cells
+        ):
+            return False
+
+        ordinals = [value for _, value in ordinal_cells]
+        repeated_sequence = False
+        for sequence_length in range(2, min(10, len(ordinals) // 2) + 1):
+            sequence = list(range(1, sequence_length + 1))
+            if (
+                len(ordinals) % sequence_length == 0
+                and ordinals == sequence * (len(ordinals) // sequence_length)
+            ):
+                repeated_sequence = True
+                break
+        if not repeated_sequence:
+            return False
+
+        parent_groups = [
+            merged_range
+            for merged_range in worksheet.merged_cells.ranges
+            if merged_range.min_row == previous_header_row
+            and merged_range.max_row == previous_header_row
+            and merged_range.max_col > merged_range.min_col
+        ]
+        if len(parent_groups) < 2:
+            return False
+        covered_columns = {
+            column
+            for merged_range in parent_groups
+            for column in range(merged_range.min_col, merged_range.max_col + 1)
+        }
+        if any(column not in covered_columns for column, _ in ordinal_cells):
+            return False
+
+        next_row = row_signals[row_idx + 1]
+        return next_row["data_count"] > 0 and next_row["text_like_count"] > 0
 
     def _build_merged_value_map(
         self,

@@ -123,7 +123,16 @@ class Store:
         return self._conversation_row(row)
 
     def update_conversation(self, conversation_id: str, **values: Any) -> dict[str, Any]:
-        allowed = {"title", "starred", "archived_at", "sheet_count", "row_count"}
+        allowed = {
+            "title",
+            "starred",
+            "archived_at",
+            "file_name",
+            "file_size",
+            "local_file_path",
+            "sheet_count",
+            "row_count",
+        }
         assignments = []
         params = []
         for key, value in values.items():
