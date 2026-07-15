@@ -203,13 +203,35 @@ def test_scan_stops_at_numeric_data_after_single_level_header(tmp_path):
     ws = workbook.active
     ws.title = "Flat"
 
-    ws.append(["Item", "Amount", "Status"])
-    ws.append([None, 10, 20])
-    ws.append(["Section", "Owner", "State"])
-    ws.append(["A", 30, 40])
+    ws.append(["Item", "Value A", "Value B", "Value C", "Flag A", "Flag B", "Flag C"])
+    ws.append(["A", 1, 2, 3, 1, 2, 3])
+    ws.append(["B", 10, 20, 30, 40, 50, 60])
     workbook.save(workbook_path)
 
     manifest = WorkbookIngestor().scan(workbook_path)
     table = manifest["files"][0]["sheets"][0]["tables"][0]
 
     assert table["header_candidates"] == [1]
+
+
+def test_scan_detects_repeated_ordinal_leaf_under_merged_groups(tmp_path):
+    workbook_path = tmp_path / "ordered_header.xlsx"
+    workbook = openpyxl.Workbook()
+    ws = workbook.active
+    ws.title = "Ordered"
+
+    ws.append(["Results", None, None, None, None, None, None])
+    ws.append([None, None, None, None, None, None, None])
+    ws.append(["Item", "Score", None, None, "Rate", None, None])
+    ws.merge_cells("A3:A4")
+    ws.merge_cells("B3:D3")
+    ws.merge_cells("E3:G3")
+    ws.append([None, 1, 2, 3, 1, 2, 3])
+    ws.append(["A", 10, 20, 30, 0.1, 0.2, 0.3])
+    ws.append(["B", 40, 50, 60, 0.4, 0.5, 0.6])
+    workbook.save(workbook_path)
+
+    manifest = WorkbookIngestor().scan(workbook_path)
+    table = manifest["files"][0]["sheets"][0]["tables"][0]
+
+    assert table["header_candidates"] == [3, 4]

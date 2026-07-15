@@ -255,6 +255,18 @@ class WorkbookIngestor:
                     # Keep scanning until a credible text header appears.
                     row_idx += 1
                     continue
+                if self._is_repeated_ordinal_leaf_header(
+                    worksheet,
+                    row_idx=row_idx,
+                    previous_header_row=candidates[-1],
+                    scan_end=scan_end,
+                    min_col=min_col,
+                    max_col=max_col,
+                    row_signals=row_signals,
+                ):
+                    candidates.append(row_idx)
+                    row_idx += 1
+                    continue
                 # First real data row after the header block ends the search.
                 break
             base_header_like = (
@@ -312,6 +324,68 @@ class WorkbookIngestor:
 
     def _is_formula(self, value: Any) -> bool:
         return isinstance(value, str) and value.lstrip().startswith("=")
+
+    def _is_repeated_ordinal_leaf_header(
+        self,
+        worksheet: Any,
+        *,
+        row_idx: int,
+        previous_header_row: int,
+        scan_end: int,
+        min_col: int,
+        max_col: int,
+        row_signals: dict[int, dict[str, Any]],
+    ) -> bool:
+        """Return true for repeated 1..N leaves under merged parent groups."""
+        if row_idx + 1 > scan_end:
+            return False
+        raw_values = [
+            worksheet.cell(row_idx, col_idx).value
+            for col_idx in range(min_col, max_col + 1)
+        ]
+        ordinal_cells = [
+            (min_col + offset, value)
+            for offset, value in enumerate(raw_values)
+            if value not in (None, "")
+        ]
+        if len(ordinal_cells) < 4 or any(
+            not isinstance(value, int) or isinstance(value, bool)
+            for _, value in ordinal_cells
+        ):
+            return False
+
+        ordinals = [value for _, value in ordinal_cells]
+        repeated_sequence = False
+        for sequence_length in range(2, min(10, len(ordinals) // 2) + 1):
+            sequence = list(range(1, sequence_length + 1))
+            if (
+                len(ordinals) % sequence_length == 0
+                and ordinals == sequence * (len(ordinals) // sequence_length)
+            ):
+                repeated_sequence = True
+                break
+        if not repeated_sequence:
+            return False
+
+        parent_groups = [
+            merged_range
+            for merged_range in worksheet.merged_cells.ranges
+            if merged_range.min_row == previous_header_row
+            and merged_range.max_row == previous_header_row
+            and merged_range.max_col > merged_range.min_col
+        ]
+        if len(parent_groups) < 2:
+            return False
+        covered_columns = {
+            column
+            for merged_range in parent_groups
+            for column in range(merged_range.min_col, merged_range.max_col + 1)
+        }
+        if any(column not in covered_columns for column, _ in ordinal_cells):
+            return False
+
+        next_row = row_signals[row_idx + 1]
+        return next_row["data_count"] > 0 and next_row["text_like_count"] > 0
 
     def _build_merged_value_map(
         self,

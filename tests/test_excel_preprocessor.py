@@ -844,6 +844,46 @@ def test_ingest_then_process_retains_group_columns_after_numeric_preamble(tmp_pa
     assert table.header_paths["TOTAL"] == ["TOTAL"]
 
 
+def test_ingest_then_process_preserves_ordered_leaf_header_lineage(tmp_path):
+    workbook_path = tmp_path / "ordered_header.xlsx"
+    workbook = openpyxl.Workbook()
+    ws = workbook.active
+    ws.title = "Ordered"
+
+    ws.append(["Results", None, None, None, None, None, None])
+    ws.append([None, None, None, None, None, None, None])
+    ws.append(["Item", "Score", None, None, "Rate", None, None])
+    ws.merge_cells("A3:A4")
+    ws.merge_cells("B3:D3")
+    ws.merge_cells("E3:G3")
+    ws.append([None, 1, 2, 3, 1, 2, 3])
+    ws.append(["A", 10, 20, 30, 0.1, 0.2, 0.3])
+    ws.append(["B", 40, 50, 60, 0.4, 0.5, 0.6])
+    workbook.save(workbook_path)
+
+    manifest = WorkbookIngestor().scan(workbook_path)
+    table = ExcelPreprocessor().process(workbook_path, manifest).tables[0]
+    normalized_path = Path(table.parquet_path)
+    normalized = (
+        pd.read_parquet(normalized_path)
+        if normalized_path.suffix == ".parquet"
+        else pd.read_excel(normalized_path)
+    )
+
+    assert list(normalized.columns[:7]) == [
+        "Item",
+        "Score_1",
+        "Score_2",
+        "Score_3",
+        "Rate_1",
+        "Rate_2",
+        "Rate_3",
+    ]
+    assert len(normalized) == 2
+    assert table.header_paths["Score_3"] == ["Score", "3"]
+    assert table.header_paths["Rate_2"] == ["Rate", "2"]
+
+
 def test_process_populates_trivial_header_path_for_single_level_tables(tmp_path):
     """Single-level tables also get header_path, keyed to the column name."""
 
