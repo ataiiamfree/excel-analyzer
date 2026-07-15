@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shutil
 import uuid
 from pathlib import Path
 from typing import Annotated
@@ -22,7 +23,13 @@ def save_ephemeral_upload(upload: UploadFile, config: Config) -> str:
     run_id = f"run_{uuid.uuid4().hex}"
     workspace = Workspace(root=config.workspace_dir, task_id=run_id)
     target = Path(workspace.path) / "raw" / Path(upload.filename or "upload.xlsx").name
-    save_validated_excel(upload, target, max_size_mb=config.max_file_size_mb)
+    try:
+        save_validated_excel(upload, target, max_size_mb=config.max_file_size_mb)
+    except HTTPException:
+        # Workspace already mkdir'd its skeleton; wipe it so a burst of
+        # rejected uploads (413/415/422) does not leave orphaned directories.
+        shutil.rmtree(Path(config.workspace_dir) / run_id, ignore_errors=True)
+        raise
     return str(target.resolve())
 
 

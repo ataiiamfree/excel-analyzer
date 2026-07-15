@@ -112,10 +112,21 @@ async def conversation_ws(websocket: WebSocket, conversation_id: str) -> None:
 web_dist = Path(config.web_dist_dir)
 if web_dist.exists():
     app.mount("/assets", StaticFiles(directory=web_dist / "assets"), name="assets")
+    web_dist_resolved = web_dist.resolve()
 
     @app.get("/{path:path}", include_in_schema=False)
     async def spa_fallback(path: str) -> FileResponse:
-        target = web_dist / path
-        if path and target.exists() and target.is_file():
-            return FileResponse(target)
-        return FileResponse(web_dist / "index.html")
+        # Path traversal defence: resolve the candidate and require it to sit
+        # inside the built SPA directory. Without this, Starlette forwards
+        # url-encoded `..` (`%2e%2e/…`) into the path parameter unchanged and
+        # a fabricated URL can serve any file the process can read (`.env`,
+        # SQLite DB, arbitrary system files).
+        if path:
+            try:
+                target = (web_dist / path).resolve()
+                target.relative_to(web_dist_resolved)
+            except (OSError, ValueError):
+                target = None
+            if target is not None and target.exists() and target.is_file():
+                return FileResponse(target)
+        return FileResponse(web_dist_resolved / "index.html")

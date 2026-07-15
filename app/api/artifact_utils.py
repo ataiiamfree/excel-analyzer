@@ -46,14 +46,31 @@ def artifact_urls(artifact_id: str, kind: str) -> dict[str, str | None]:
 
 
 def resolve_artifact_path(artifact: dict, workspace_root: str | Path) -> Path:
+    """Resolve an artifact record's on-disk path with containment enforcement.
+
+    Every artifact path — relative or absolute — must land inside the workspace
+    root. Server code populates `path` today, but a bug or a future ingestion
+    that lets a crafted value into the DB should not turn the artifact download
+    endpoint into an arbitrary-file-read primitive.
+    """
     raw_path = Path(artifact["path"])
+    root = Path(workspace_root).resolve()
     if raw_path.is_absolute():
-        return raw_path
-    conversation_id = artifact.get("conversation_id")
-    if conversation_id:
-        workspace = Workspace(root=workspace_root, task_id=conversation_id)
-        return Path(workspace.path) / raw_path
-    return raw_path
+        candidate = raw_path.resolve()
+    else:
+        conversation_id = artifact.get("conversation_id")
+        if conversation_id:
+            workspace = Workspace(root=workspace_root, task_id=conversation_id)
+            candidate = (Path(workspace.path) / raw_path).resolve()
+        else:
+            candidate = (root / raw_path).resolve()
+    try:
+        candidate.relative_to(root)
+    except ValueError as exc:
+        raise ValueError(
+            f"artifact path {raw_path} escapes workspace root {root}"
+        ) from exc
+    return candidate
 
 
 def artifact_metadata_from_manifest(item: dict | None) -> dict:
