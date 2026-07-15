@@ -19,7 +19,7 @@ from app.api.ws_events import ClientErrorEvent, ClientEvent
 from pydantic import ValidationError
 
 config = get_config()
-app = FastAPI(title="ChatExcel API", version="0.1.0")
+app = FastAPI(title="ChatExcel API", version="0.9.0")
 manager = ConnectionManager()
 
 origins = [item.strip() for item in config.cors_origins.split(",") if item.strip()]
