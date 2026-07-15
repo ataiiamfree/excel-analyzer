@@ -181,7 +181,6 @@ async def replace_file(
     file_path, file_size, sheet_count, row_count = save_upload_to_workspace(file, conversation_id, config)
     row = store.update_conversation(
         conversation_id,
-        title=file.filename or "新的 Excel 分析",
         file_name=file.filename,
         file_size=file_size,
         local_file_path=file_path,
