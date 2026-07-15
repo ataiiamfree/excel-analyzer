@@ -130,6 +130,19 @@ def test_basic_invariants_export_passes_with_current_step_output(tmp_path):
     assert result.status == "passed"
 
 
+def test_basic_invariants_final_answer_output_does_not_require_file(tmp_path):
+    checker = ResultChecker()
+    result = checker.validate(
+        _make_step(instruction="统计超过阈值的年份数，并输出最终答案"),
+        _make_result(stdout="Final Answer: 4"),
+        _make_context(),
+        _make_workspace(tmp_path),
+    )
+
+    assert not any(c.name == "export_has_output" for c in result.checks)
+    assert result.status == "passed"
+
+
 def test_question_task_requires_marked_final_answer(tmp_path):
     checker = ResultChecker()
     result = checker.validate(

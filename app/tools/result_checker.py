@@ -858,7 +858,9 @@ class ResultChecker:
                 ))
 
         # 检查2: 如果是导出操作，检查输出目录是否有文件
-        export_keywords = ("导出", "export", "保存", "save", "写入", "输出", "结果表")
+        # `输出最终答案` describes stdout, not a downloadable artifact. Treat
+        # only explicit persistence/export language as an output-file contract.
+        export_keywords = ("导出", "export", "保存", "save", "写入", "结果表")
         if any(kw in instruction for kw in export_keywords):
             output_files = getattr(exec_result, "output_files", None)
             if output_files is None:
