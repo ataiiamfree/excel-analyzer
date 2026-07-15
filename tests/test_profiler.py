@@ -40,3 +40,80 @@ def test_profiler_detects_deduped_repeated_header_families(tmp_path):
             "dtype": "int64",
         }
     ]
+
+
+def test_profiler_exposes_header_path_and_keeps_multi_level_columns_ungrouped(tmp_path):
+    path = tmp_path / "region_year.xlsx"
+    pd.DataFrame(
+        {
+            "Species": ["Cod", "Haddock"],
+            "2022": [100, 80],
+            "2023": [110, 90],
+            "2022_2": [50, 40],
+            "2023_2": [55, 45],
+            "_source_file": ["book.xlsx"] * 2,
+            "_source_sheet": ["Sheet1"] * 2,
+            "_source_row": [4, 5],
+        }
+    ).to_excel(path, index=False)
+
+    table = NormalizedTable(
+        table_id="Sheet1_t1",
+        source_file="book.xlsx",
+        source_sheet="Sheet1",
+        source_range="A1:E5",
+        parquet_path=str(path),
+        preview_xlsx_path=str(path),
+        columns=[],
+        row_count=2,
+        header_paths={
+            "Species": ["Species"],
+            "2022": ["Landings into", "Scotland", "2022"],
+            "2023": ["Landings into", "Scotland", "2023"],
+            "2022_2": ["Landings into", "England", "2022"],
+            "2023_2": ["Landings into", "England", "2023"],
+        },
+    )
+
+    profile = Profiler().profile([table])["tables"][0]
+    detail_by_name = {item["name"]: item for item in profile["columns_detail"]}
+
+    # Multi-level columns are individually preserved (not collapsed by the
+    # {N}-pattern grouper) so their lineage stays visible to the model.
+    assert set(detail_by_name) == {"Species", "2022", "2023", "2022_2", "2023_2"}
+    assert detail_by_name["2023_2"]["header_path"] == [
+        "Landings into",
+        "England",
+        "2023",
+    ]
+    assert detail_by_name["Species"]["header_path"] == ["Species"]
+    assert profile["columns_grouped"] == []
+
+
+def test_profiler_exposes_excel_display_divisor(tmp_path):
+    path = tmp_path / "amounts.xlsx"
+    pd.DataFrame({"Amount": [8_955_000, 13_555_000]}).to_excel(path, index=False)
+    table = NormalizedTable(
+        table_id="Sheet1_t1",
+        source_file="book.xlsx",
+        source_sheet="Sheet1",
+        source_range="A1:A3",
+        parquet_path=str(path),
+        preview_xlsx_path=str(path),
+        columns=[
+            {
+                "name": "Amount",
+                "dtype": "int64",
+                "header_path": ["Fundraising", "£(000)", "Amount"],
+                "excel_number_formats": ["#,##0,"],
+                "excel_display_divisor": 1000,
+            }
+        ],
+        row_count=2,
+    )
+
+    detail = Profiler().profile([table])["tables"][0]["columns_detail"][0]
+
+    assert detail["header_path"] == ["Fundraising", "£(000)", "Amount"]
+    assert detail["excel_number_formats"] == ["#,##0,"]
+    assert detail["excel_display_divisor"] == 1000

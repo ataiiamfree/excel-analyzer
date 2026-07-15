@@ -5,6 +5,7 @@ import pandas as pd
 
 from app.tools.excel_preprocessor import ExcelPreprocessor
 from app.tools.profiler import Profiler
+from app.tools.workbook_ingestor import WorkbookIngestor
 
 
 def test_summary_keyword_inside_business_value_is_not_auto_excluded():
@@ -387,6 +388,396 @@ def test_context_group_still_detects_first_floor_pattern():
     )
 
     assert label == "First Floor"
+
+
+def test_merge_multi_level_headers_returns_lineage():
+    preprocessor = ExcelPreprocessor()
+    rows = [
+        ["采购金额", "采购金额", "销售金额", "销售金额"],
+        ["计划", "实际", "计划", "实际"],
+        [100, 110, 200, 190],
+    ]
+
+    paths = preprocessor._merge_multi_level_headers(rows, header_row=2)
+
+    assert paths == [
+        ["采购金额", "计划"],
+        ["采购金额", "实际"],
+        ["销售金额", "计划"],
+        ["销售金额", "实际"],
+    ]
+
+
+def test_process_preserves_header_lineage_for_grouped_year_columns(tmp_path):
+    """Sparse grouped headers (SheetBench 118 shape).
+
+    Parent group `Total Fundraising / Grant / Total Income` spans a
+    `£(000)` unit row above per-year leaf columns. Post-normalize we should
+    see year columns keyed by their dedup names and a `header_paths` map
+    that resolves them back to the parent group.
+    """
+
+    workbook_path = tmp_path / "grouped_years.xlsx"
+    workbook = openpyxl.Workbook()
+    ws = workbook.active
+    ws.title = "Sheet1"
+    # Row 1: parent group (spanned via merged cells)
+    ws.append(["Charity", "Total Fundraising", None, "Grant", None])
+    ws.merge_cells("B1:C1")
+    ws.merge_cells("D1:E1")
+    # Row 2: unit row
+    ws.append([None, "£(000)", "£(000)", "£(000)", "£(000)"])
+    # Row 3: leaf year columns
+    ws.append([None, "2008/09", "2009/10", "2008/09", "2009/10"])
+    # Data rows
+    ws.append(["Cancer Research UK", 42, 55, 12, 15])
+    ws.append(["Oxfam", 30, 33, 20, 22])
+    workbook.save(workbook_path)
+
+    manifest = {
+        "manifest_path": "workbook_manifest.json",
+        "files": [
+            {
+                "path": str(workbook_path),
+                "sheets": [
+                    {
+                        "name": "Sheet1",
+                        "tables": [
+                            {
+                                "table_id": "Sheet1_t1",
+                                "range": "A1:E5",
+                                "header_candidates": [1, 2, 3],
+                            }
+                        ],
+                    }
+                ],
+            }
+        ],
+    }
+
+    result = ExcelPreprocessor().process(workbook_path, manifest)
+    table = result.tables[0]
+
+    # `_merge_multi_level_headers` concatenates parent → leaf with underscores;
+    # header_paths keeps the structured lineage side-by-side for downstream use.
+    fund_col = "Total Fundraising_£(000)_2008/09"
+    grant_col = "Grant_£(000)_2008/09"
+    assert fund_col in table.header_paths
+    assert grant_col in table.header_paths
+    assert table.header_paths[fund_col] == ["Total Fundraising", "£(000)", "2008/09"]
+    assert table.header_paths[grant_col] == ["Grant", "£(000)", "2008/09"]
+    # Charity column has no lineage → single-element path equal to the name
+    assert table.header_paths["Charity"] == ["Charity"]
+    # header_path also shows up on column metadata for downstream consumers
+    charity_meta = next(c for c in table.columns if c["name"] == "Charity")
+    assert charity_meta["header_path"] == ["Charity"]
+
+
+def test_process_preserves_header_lineage_for_region_year_columns(tmp_path):
+    """Region × year multi-level headers (SheetBench 2292 shape).
+
+    `Landings into` groups regions like `Scotland` and `England`, each
+    with per-year sub-columns. Leaf column names collide, so lineage is
+    the only reliable way to pick the right column.
+    """
+
+    workbook_path = tmp_path / "region_year.xlsx"
+    workbook = openpyxl.Workbook()
+    ws = workbook.active
+    ws.title = "Sheet1"
+    # Row 1: top-level group
+    ws.append(["Species", "Landings into", None, None, None])
+    ws.merge_cells("B1:E1")
+    # Row 2: region
+    ws.append([None, "Scotland", "Scotland", "England", "England"])
+    ws.merge_cells("B2:C2")
+    ws.merge_cells("D2:E2")
+    # Row 3: year
+    ws.append([None, "2022", "2023", "2022", "2023"])
+    # Data
+    ws.append(["Cod", 100, 110, 50, 55])
+    ws.append(["Haddock", 80, 90, 40, 45])
+    workbook.save(workbook_path)
+
+    manifest = {
+        "manifest_path": "workbook_manifest.json",
+        "files": [
+            {
+                "path": str(workbook_path),
+                "sheets": [
+                    {
+                        "name": "Sheet1",
+                        "tables": [
+                            {
+                                "table_id": "Sheet1_t1",
+                                "range": "A1:E5",
+                                "header_candidates": [1, 2, 3],
+                            }
+                        ],
+                    }
+                ],
+            }
+        ],
+    }
+
+    result = ExcelPreprocessor().process(workbook_path, manifest)
+    table = result.tables[0]
+
+    # Merged names carry parent+region+year; header_paths keeps the structured
+    # lineage so the model can pick e.g. Scotland vs England without parsing
+    # the underscored name.
+    scotland_2023 = "Landings into_Scotland_2023"
+    england_2023 = "Landings into_England_2023"
+    assert table.header_paths[scotland_2023] == [
+        "Landings into",
+        "Scotland",
+        "2023",
+    ]
+    assert table.header_paths[england_2023] == [
+        "Landings into",
+        "England",
+        "2023",
+    ]
+
+
+def test_forward_fill_sparse_header_row_spans_gaps():
+    preprocessor = ExcelPreprocessor()
+    row = [None, "Landings into", None, None, None, "Total landings", None, None]
+
+    filled = preprocessor._forward_fill_sparse_header_row(row, num_cols=8)
+
+    assert filled == [
+        None,
+        "Landings into",
+        "Landings into",
+        "Landings into",
+        "Landings into",
+        "Total landings",
+        "Total landings",
+        "Total landings",
+    ]
+
+
+def test_forward_fill_leaves_dense_rows_untouched():
+    preprocessor = ExcelPreprocessor()
+    row = ["A", "B", "C", "D", "E"]
+
+    filled = preprocessor._forward_fill_sparse_header_row(row, num_cols=5)
+
+    assert filled == ["A", "B", "C", "D", "E"]
+
+
+def test_merge_multi_level_headers_skips_penultimate_annotation_row():
+    """4-row header: parent → region → %-marker annotation → leaf year.
+
+    The %-marker row is per-cell annotation, not spanning. Forward-fill
+    would contaminate non-% columns; the merger should leave that row alone.
+    """
+
+    preprocessor = ExcelPreprocessor()
+    rows = [
+        [None, "Landings into", None, None, "Total landings", None, None],
+        [None, "Scotland", None, None, "by UK vessels", None, None],
+        [None, None, None, "%", None, None, "%"],
+        [None, 2022, 2023, "change", 2022, 2023, "change"],
+        [None, 100, 110, -5.5, 200, 210, -3.2],
+    ]
+
+    paths = preprocessor._merge_multi_level_headers(rows, header_row=4)
+
+    # Scotland's 2022 and 2023 stay clean (no % contamination)
+    assert paths[1] == ["Landings into", "Scotland", "2022"]
+    assert paths[2] == ["Landings into", "Scotland", "2023"]
+    # Scotland's change column correctly carries the % annotation
+    assert paths[3] == ["Landings into", "Scotland", "%", "change"]
+    # by UK vessels' 2022/2023 also clean
+    assert paths[4] == ["Total landings", "by UK vessels", "2022"]
+    assert paths[5] == ["Total landings", "by UK vessels", "2023"]
+
+
+def test_ingest_then_process_preserves_sparse_multi_level_lineage_end_to_end(tmp_path):
+    """SheetBench 2292 shape: no merged cells, sparse group cells.
+
+    `Landings into` sits alone at col B expected to span cols B-D; then
+    `Scotland`/`England` at cols B and E expected to span 3 cols each.
+    Without ingestor sparse-row extension + preprocessor forward-fill, the
+    lineage never reaches the year columns and the model can't distinguish
+    Scotland/2023 from England/2023.
+    """
+
+    from app.tools.workbook_ingestor import WorkbookIngestor
+
+    workbook_path = tmp_path / "sheetbench_2292_shape.xlsx"
+    workbook = openpyxl.Workbook()
+    ws = workbook.active
+    ws.title = "Sheet1"
+
+    # Structure: parent group row (sparse), region row (sparse), annotation
+    # row (very sparse), leaf year row (dense). Regions Scotland/England each
+    # span 2 leaf year columns; UK carries a `%` annotation column.
+    ws.append([None, "Landings into", None, None, None, "Total landings", None])
+    ws.append([None, "Scotland", None, "England", None, "UK", None])
+    ws.append([None, None, None, None, None, "%", None])
+    ws.append(["Stock", 2022, 2023, 2022, 2023, "quota", "change"])
+    ws.append(["NS Herring", 100, 110, 200, 210, 300, -3.2])
+    ws.append(["WC Mackerel", 300, 320, 400, 420, 500, 5.0])
+    workbook.save(workbook_path)
+
+    manifest = WorkbookIngestor().scan(workbook_path)
+    result = ExcelPreprocessor().process(workbook_path, manifest)
+    table = result.tables[0]
+
+    # Region + year lineage is correctly assembled for tonnage columns
+    assert table.header_paths["Landings into_Scotland_2022"] == [
+        "Landings into",
+        "Scotland",
+        "2022",
+    ]
+    assert table.header_paths["Landings into_Scotland_2023"] == [
+        "Landings into",
+        "Scotland",
+        "2023",
+    ]
+    assert table.header_paths["Landings into_England_2022"] == [
+        "Landings into",
+        "England",
+        "2022",
+    ]
+    assert table.header_paths["Landings into_England_2023"] == [
+        "Landings into",
+        "England",
+        "2023",
+    ]
+    # Annotation row's `%` only reaches the column it was actually placed on
+    # (UK quota column). Non-annotated year columns stay clean.
+    assert table.header_paths["Total landings_UK_%_quota"] == [
+        "Total landings",
+        "UK",
+        "%",
+        "quota",
+    ]
+    assert "%" not in table.header_paths["Landings into_England_2023"]
+
+
+def test_ingest_then_process_preserves_multi_level_lineage_end_to_end(tmp_path):
+    """SheetBench 118 shape driven from ingestor, not a hand-crafted manifest.
+
+    Guards against the failure mode where our preprocessor plumbing works but
+    the ingestor's header detection only returns the leaf row, leaving the
+    lineage map single-level.
+    """
+
+    from app.tools.workbook_ingestor import WorkbookIngestor
+
+    workbook_path = tmp_path / "sheetbench_118_shape.xlsx"
+    workbook = openpyxl.Workbook()
+    ws = workbook.active
+    ws.title = "Sheet1"
+
+    ws.append([None, "Total Fundraising", None, None, "Grant", None, None])
+    ws.merge_cells("B1:D1")
+    ws.merge_cells("E1:G1")
+    ws.append([None, "£(000)", None, None, "£(000)", None, None])
+    ws.merge_cells("B2:D2")
+    ws.merge_cells("E2:G2")
+    ws.append([
+        "Charity",
+        "2008/09", "2009/10", "2010/11",
+        "2008/09", "2009/10", "2010/11",
+    ])
+    ws.append(["British Museum", 100, 110, 120, 10, 12, 14])
+    ws.append(["Oxfam", 80, 90, 100, 5, 6, 7])
+    workbook.save(workbook_path)
+
+    manifest = WorkbookIngestor().scan(workbook_path)
+    result = ExcelPreprocessor().process(workbook_path, manifest)
+    table = result.tables[0]
+
+    fund_col = "Total Fundraising_£(000)_2008/09"
+    grant_col = "Grant_£(000)_2008/09"
+    assert fund_col in table.header_paths
+    assert grant_col in table.header_paths
+    assert table.header_paths[fund_col] == [
+        "Total Fundraising",
+        "£(000)",
+        "2008/09",
+    ]
+    assert table.header_paths[grant_col] == ["Grant", "£(000)", "2008/09"]
+    # And the metadata surfaces it downstream
+    fund_meta = next(c for c in table.columns if c["name"] == fund_col)
+    assert fund_meta["header_path"] == ["Total Fundraising", "£(000)", "2008/09"]
+
+
+def test_process_populates_trivial_header_path_for_single_level_tables(tmp_path):
+    """Single-level tables also get header_path, keyed to the column name."""
+
+    workbook_path = tmp_path / "flat.xlsx"
+    workbook = openpyxl.Workbook()
+    ws = workbook.active
+    ws.title = "Sheet1"
+    ws.append(["Name", "Amount"])
+    ws.append(["A", 10])
+    ws.append(["B", 20])
+    workbook.save(workbook_path)
+
+    manifest = {
+        "manifest_path": "workbook_manifest.json",
+        "files": [
+            {
+                "path": str(workbook_path),
+                "sheets": [
+                    {
+                        "name": "Sheet1",
+                        "tables": [
+                            {
+                                "table_id": "Sheet1_t1",
+                                "range": "A1:B3",
+                                "header_candidates": [1],
+                            }
+                        ],
+                    }
+                ],
+            }
+        ],
+    }
+
+    result = ExcelPreprocessor().process(workbook_path, manifest)
+    table = result.tables[0]
+    assert table.header_paths["Name"] == ["Name"]
+    assert table.header_paths["Amount"] == ["Amount"]
+    for col_meta in table.columns:
+        assert col_meta["header_path"] == [col_meta["name"]]
+
+
+def test_process_distinguishes_excel_display_scaling_from_stored_thousands(tmp_path):
+    workbook_path = tmp_path / "display_scale.xlsx"
+    workbook = openpyxl.Workbook()
+    ws = workbook.active
+    ws.title = "Sheet1"
+    ws.append(["Museum", "Full value", "Stored thousands"])
+    ws.append(["A", 8_955_000, 8_955])
+    ws.append(["B", 13_555_000, 13_555])
+    for row in range(2, 4):
+        ws.cell(row, 2).number_format = "#,##0,"
+        ws.cell(row, 3).number_format = "#,##0"
+    workbook.save(workbook_path)
+
+    manifest = WorkbookIngestor().scan(workbook_path)
+    table = ExcelPreprocessor().process(workbook_path, manifest).tables[0]
+    metadata = {item["name"]: item for item in table.columns}
+
+    assert metadata["Full value"]["excel_number_formats"] == ["#,##0,"]
+    assert metadata["Full value"]["excel_display_divisor"] == 1000
+    assert metadata["Stored thousands"]["excel_number_formats"] == ["#,##0"]
+    assert "excel_display_divisor" not in metadata["Stored thousands"]
+
+
+def test_excel_display_divisor_ignores_grouping_commas_and_literals():
+    preprocessor = ExcelPreprocessor()
+
+    assert preprocessor._excel_display_divisor("#,##0") == 1
+    assert preprocessor._excel_display_divisor("#,##0,") == 1000
+    assert preprocessor._excel_display_divisor('"£"#,##0,, "m"') == 1_000_000
 
 
 def test_process_records_enum_and_oversized_metadata_without_truncating_data(tmp_path):

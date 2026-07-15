@@ -795,6 +795,56 @@ def test_planner_prompt_preserves_direct_metric_columns():
     assert "不要把用户提到但表中未完全同名的指标擅自改写成工作簿没有定义的派生公式" in llm.prompt
 
 
+def test_planner_prompt_includes_excel_display_scaling_semantics():
+    class RecordingLLM:
+        def __init__(self):
+            self.prompt = ""
+
+        async def call(self, prompt, **kwargs):
+            self.prompt = prompt
+            return json.dumps({
+                "steps": [
+                    {
+                        "id": "s1",
+                        "tool": "python",
+                        "description": "compare fundraising",
+                        "instruction": "compare raw values with the threshold",
+                    }
+                ],
+                "report_outline": [],
+            })
+
+    llm = RecordingLLM()
+    orch = Orchestrator(llm_client=llm, tools=None, config=_make_config())
+    context = TaskContext(
+        "t1",
+        "How many years exceeded £10 million?",
+        {},
+        {
+            "tables": [
+                {
+                    "table_id": "Sheet1_t1",
+                    "path": "normalized/Sheet1_t1.xlsx",
+                    "columns_detail": [
+                        {
+                            "name": "Fundraising_£(000)_2023",
+                            "dtype": "int64",
+                            "header_path": ["Fundraising", "£(000)", "2023"],
+                            "excel_display_divisor": 1000,
+                        }
+                    ],
+                }
+            ]
+        },
+    )
+
+    asyncio.run(orch._plan(context, Session(session_id="s1", file_path="input.xlsx")))
+
+    assert llm.prompt.count("## 表结构提示") == 1
+    assert "Excel显示值 = normalized原始值 / N" in llm.prompt
+    assert "计划 instruction 和执行代码都不得" in llm.prompt
+
+
 def test_execute_artifact_qa_uses_manifest_and_script():
     step = Step(id="s1", tool="artifact_qa", description="解释产物", instruction="解释 trend.png")
     context = TaskContext("t1", "解释 trend.png", {}, {})

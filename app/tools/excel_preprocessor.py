@@ -7,6 +7,7 @@ business data is not excluded unless the evidence is stronger than a keyword.
 from __future__ import annotations
 
 import re
+from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -29,6 +30,9 @@ class NormalizedTable:
     enum_columns: dict[str, list[str]] = field(default_factory=dict)
     oversized_cells: list[dict[str, Any]] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    # Map final column name → header lineage from top-level group to leaf column.
+    # Always populated: single-level columns have a single-element list [name].
+    header_paths: dict[str, list[str]] = field(default_factory=dict)
 
 
 @dataclass
@@ -135,10 +139,12 @@ class ExcelPreprocessor:
             min_row=min_row,
             fallback_headers=fallback_headers,
         )
+        raw_header_paths: list[list[str]] = []
         if is_continuation and fallback_headers:
             header_rel = 0
             header_depth = 0
             headers = list(fallback_headers)
+            raw_header_paths = [[str(name)] for name in headers]
             warnings.append("检测到疑似续表块，已复用上一段同宽表头")
         else:
             header_start_abs, header_end_abs = self._detect_header_range(
@@ -150,7 +156,14 @@ class ExcelPreprocessor:
             # Step 5: 多层表头合并为单层
             if header_depth > 1:
                 header_start_rel = max(1, header_start_abs - min_row + 1)
-                self._merge_multi_level_headers(rows, header_rel, start_rel=header_start_rel)
+                raw_header_paths = self._merge_multi_level_headers(
+                    rows, header_rel, start_rel=header_start_rel
+                )
+            else:
+                raw_header_paths = [
+                    [str(value).strip()] if value not in (None, "") else []
+                    for value in rows[header_rel - 1]
+                ]
             headers = self._dedupe_headers(rows[header_rel - 1])
 
         # 检测数据区域边界（从底部向上过滤脚注行）
@@ -218,8 +231,30 @@ class ExcelPreprocessor:
         if oversized_cells:
             warnings.append(f"检测到 {len(oversized_cells)} 个超长文本单元格，profile 预览会截断")
 
+        header_paths = self._build_header_paths(
+            deduped_headers=headers,
+            raw_paths=raw_header_paths,
+            dataframe_columns=[str(col) for col in dataframe.columns],
+        )
+        column_formats = self._build_column_format_metadata(
+            worksheet=worksheet,
+            rows=rows,
+            row_flags=row_flags,
+            headers=headers,
+            min_row=min_row,
+            min_col=min_col,
+            header_rel=header_rel,
+            data_end=data_end,
+        )
+
         columns = [
-            self._column_metadata(dataframe, str(col), enum_columns)
+            self._column_metadata(
+                dataframe,
+                str(col),
+                enum_columns,
+                header_paths,
+                column_formats,
+            )
             for col in dataframe.columns
         ]
         return NormalizedTable(
@@ -234,6 +269,7 @@ class ExcelPreprocessor:
             enum_columns=enum_columns,
             oversized_cells=oversized_cells,
             warnings=warnings,
+            header_paths=header_paths,
         )
 
     def _context_group_label(
@@ -346,11 +382,128 @@ class ExcelPreprocessor:
         dataframe: pd.DataFrame,
         column: str,
         enum_columns: dict[str, list[str]],
+        header_paths: dict[str, list[str]],
+        column_formats: dict[str, dict[str, Any]],
     ) -> dict[str, Any]:
         metadata: dict[str, Any] = {"name": column, "dtype": str(dataframe[column].dtype)}
         if column in enum_columns:
             metadata["enum_values"] = enum_columns[column]
+        metadata["header_path"] = list(header_paths.get(column) or [column])
+        metadata.update(column_formats.get(column) or {})
         return metadata
+
+    def _build_column_format_metadata(
+        self,
+        *,
+        worksheet: Any,
+        rows: list[list[Any]],
+        row_flags: dict[int, dict[str, Any]],
+        headers: list[str],
+        min_row: int,
+        min_col: int,
+        header_rel: int,
+        data_end: int,
+    ) -> dict[str, dict[str, Any]]:
+        """Preserve Excel display scaling without changing stored values.
+
+        A trailing comma in an Excel number format divides the displayed value
+        by 1,000. Normalized tables retain the raw stored value, so downstream
+        analysis needs this metadata to avoid applying the display scaling a
+        second time merely because a header also says ``(000)``.
+        """
+        metadata: dict[str, dict[str, Any]] = {}
+        for column_offset, header in enumerate(headers):
+            formats: list[str] = []
+            numeric_count = 0
+            for rel_idx in range(header_rel + 1, data_end + 1):
+                if row_flags.get(rel_idx, {}).get("exclude"):
+                    continue
+                row = rows[rel_idx - 1] if rel_idx - 1 < len(rows) else []
+                value = row[column_offset] if column_offset < len(row) else None
+                if isinstance(value, bool) or not isinstance(value, (int, float)):
+                    continue
+                numeric_count += 1
+                cell = worksheet.cell(
+                    row=min_row + rel_idx - 1,
+                    column=min_col + column_offset,
+                )
+                number_format = str(cell.number_format or "General")
+                if number_format.lower() != "general":
+                    formats.append(number_format)
+
+            if not formats:
+                continue
+            counts = Counter(formats)
+            dominant_format, dominant_count = counts.most_common(1)[0]
+            column_metadata: dict[str, Any] = {
+                "excel_number_formats": [
+                    number_format for number_format, _ in counts.most_common(3)
+                ]
+            }
+            display_divisor = self._excel_display_divisor(dominant_format)
+            if (
+                display_divisor > 1
+                and numeric_count > 0
+                and dominant_count / numeric_count >= 0.8
+            ):
+                column_metadata["excel_display_divisor"] = display_divisor
+            metadata[header] = column_metadata
+        return metadata
+
+    def _excel_display_divisor(self, number_format: str) -> int:
+        """Return the display-only divisor encoded by trailing format commas."""
+        section = str(number_format or "").split(";", 1)[0]
+        cleaned: list[str] = []
+        index = 0
+        while index < len(section):
+            char = section[index]
+            if char == '"':
+                index += 1
+                while index < len(section) and section[index] != '"':
+                    index += 1
+            elif char == "[":
+                index += 1
+                while index < len(section) and section[index] != "]":
+                    index += 1
+            elif char in {"\\", "_", "*"}:
+                index += 1
+            else:
+                cleaned.append(char)
+            index += 1
+
+        compact = "".join(cleaned)
+        placeholders = [
+            index for index, char in enumerate(compact) if char in {"0", "#", "?"}
+        ]
+        if not placeholders:
+            return 1
+        trailing = compact[placeholders[-1] + 1 :]
+        comma_count = trailing.count(",")
+        return 1000 ** comma_count
+
+    def _build_header_paths(
+        self,
+        *,
+        deduped_headers: list[str],
+        raw_paths: list[list[str]],
+        dataframe_columns: list[str],
+    ) -> dict[str, list[str]]:
+        """Assemble the per-column header lineage map.
+
+        - Detected data headers keep their multi-level lineage.
+        - Synthetic columns (`_context_group`, `_source_*`) get a single-level
+          path equal to the column name so downstream code can treat every
+          column uniformly.
+        """
+        header_paths: dict[str, list[str]] = {}
+        for name, raw in zip(deduped_headers, raw_paths):
+            if raw:
+                header_paths[name] = list(raw)
+            else:
+                header_paths[name] = [name]
+        for column in dataframe_columns:
+            header_paths.setdefault(column, [column])
+        return header_paths
 
     def _range_bound(self, value: Any, range_ref: str) -> int:
         if value is None:
@@ -493,16 +646,41 @@ class ExcelPreprocessor:
 
     def _merge_multi_level_headers(
         self, rows: list[list[Any]], header_row: int, start_rel: int = 1
-    ) -> None:
+    ) -> list[list[str]]:
         """多层表头合并为单层：'采购金额' + '计划' → '采购金额_计划'。
 
         直接修改 rows 中 header_row-1 位置的行（rows 是 0-indexed list，header_row 是 1-based）。
         start_rel: 表头起始行（1-based），默认为 1。只合并 start_rel..header_row 范围内的行。
+
+        For sparse non-leaf header rows (e.g. `Landings into` at col B only,
+        implicitly spanning B..K until the next label at col L), forward-fill
+        each non-empty cell rightward until the next non-empty cell. The leaf
+        (bottom) header row is left as-is so per-column labels stay specific.
+
+        Returns per-column header lineage lists (top-level group → leaf column,
+        empty levels dropped, adjacent duplicates dedupped). Callers use this to
+        keep track of the original hierarchy after the flat merge destroys it.
         """
         if header_row <= 1:
-            return
+            return []
         num_cols = len(rows[0]) if rows else 0
+        leaf_rel = header_row - 1
+        header_depth = header_row - start_rel + 1
+        # The row immediately above the leaf is frequently a per-cell
+        # annotation row (e.g. `%` markers on change columns, `Tonnes` on
+        # tonnage columns). Forward-filling it contaminates non-annotated
+        # columns with those annotations. Skip it when there are ≥3 header
+        # rows; for shallower blocks the "penultimate" IS the top group row
+        # and must be filled.
+        skip_penultimate = header_depth >= 3
+        for row_rel in range(start_rel - 1, leaf_rel):
+            if skip_penultimate and row_rel == leaf_rel - 1:
+                continue
+            rows[row_rel] = self._forward_fill_sparse_header_row(
+                rows[row_rel], num_cols
+            )
         merged_headers = []
+        header_paths: list[list[str]] = []
         for col_idx in range(num_cols):
             parts: list[str] = []
             for row_idx in range(start_rel - 1, header_row):  # start_rel-1..header_row-1
@@ -515,7 +693,39 @@ class ExcelPreprocessor:
                 if p not in seen:
                     seen.append(p)
             merged_headers.append("_".join(seen) if seen else f"列{col_idx + 1}")
+            header_paths.append(seen)
         rows[header_row - 1] = merged_headers
+        return header_paths
+
+    def _forward_fill_sparse_header_row(
+        self, row: list[Any], num_cols: int
+    ) -> list[Any]:
+        """Fill each non-empty label rightward until the next non-empty cell.
+
+        Only applied to visibly sparse rows (< 60% density) so dense leaf rows
+        or annotation rows keep their per-column specificity. Cells to the
+        LEFT of the first non-empty value stay empty — some tables leave the
+        row-label column blank at the top level.
+        """
+        effective_row = list(row)
+        while len(effective_row) < num_cols:
+            effective_row.append(None)
+        filled_count = sum(
+            1
+            for value in effective_row[:num_cols]
+            if value not in (None, "") and str(value).strip()
+        )
+        if num_cols == 0 or filled_count / num_cols >= 0.6:
+            return effective_row
+        result = list(effective_row)
+        last_value: Any = None
+        for i in range(num_cols):
+            value = result[i]
+            if value not in (None, "") and str(value).strip():
+                last_value = value
+            elif last_value is not None:
+                result[i] = last_value
+        return result
 
     def _detect_data_end(self, rows: list[list[Any]], header_row: int) -> int:
         """从底部向上扫描，过滤脚注行，返回最后一个有效数据行的 1-based 索引。"""

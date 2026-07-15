@@ -284,6 +284,10 @@ class PromptAssembler:
                 lines.append(f"   warnings: {'; '.join(map(str, warnings[:3]))}")
         return "\n".join(lines)
 
+    def format_profile_hints_for_prompt(self, profile: dict[str, Any]) -> str:
+        """Return conditional structural hints shared by planner and executor."""
+        return self._format_profile_hints(profile)
+
     def _compact_columns(self, table: dict[str, Any]) -> list[str]:
         columns: list[str] = []
         for item in table.get("columns_detail") or []:
@@ -291,7 +295,20 @@ class PromptAssembler:
             if not name:
                 continue
             dtype = item.get("dtype", "?")
-            columns.append(f"{name}({dtype})")
+            path = item.get("header_path") or []
+            display_divisor = item.get("excel_display_divisor")
+            if isinstance(path, list) and len(path) > 1:
+                lineage = " > ".join(str(p) for p in path)
+                suffix = f"[header_path: {lineage}]"
+            else:
+                suffix = ""
+            if isinstance(display_divisor, (int, float)) and display_divisor > 1:
+                suffix += (
+                    f"[normalized_value: raw Excel value; "
+                    f"display_only: shown=raw/{display_divisor:g}; "
+                    "absolute_threshold: compare with raw directly]"
+                )
+            columns.append(f"{name}({dtype}){suffix}")
 
         for group in table.get("columns_grouped") or []:
             pattern = group.get("pattern")
@@ -329,7 +346,13 @@ class PromptAssembler:
         tables = profile.get("tables", []) if isinstance(profile, dict) else []
         has_column_families = self._has_column_families(tables)
         has_context_columns = self._has_context_columns(tables)
-        if not has_column_families and not has_context_columns:
+        has_multi_level_headers = self._has_multi_level_headers(tables)
+        has_scale_hint = self._has_scale_indicator_in_headers(tables)
+        if (
+            not has_column_families
+            and not has_context_columns
+            and not has_multi_level_headers
+        ):
             return ""
         lines = ["## 表结构提示"]
         if has_context_columns:
@@ -340,6 +363,28 @@ class PromptAssembler:
                     "不要把 Unit/单位/计量单位列当作楼层或分组列。",
                 ]
             )
+        if has_multi_level_headers:
+            lines.extend(
+                [
+                    "- `header_path` 是每列在原表的表头层级路径（顶级组 → 叶列），"
+                    "如 `Total Fundraising > £(000) > 2008/09`。",
+                    "- 当问题提到上层组（分类、地区、年份、材料等）时，请用 header_path 定位包含该组的列，"
+                    "不要只匹配叶列名，也不要把上层组当作行值去筛选。",
+                ]
+            )
+            if has_scale_hint:
+                lines.extend(
+                    [
+                        "- normalized 表保留 Excel 原始存储值，不会套用单元格显示格式。"
+                        "某列有 `excel_display_divisor: N` 时，公式是 `Excel显示值 = normalized原始值 / N`；"
+                        "normalized 原始值已经是实际存储金额，绝对金额阈值必须直接与它比较。"
+                        "计划 instruction 和执行代码都不得因该元数据或 `(000)` 表头"
+                        "再乘/除 normalized 值或阈值。",
+                        "- header_path 有 `(000)`、`(千)`、`(millions)` 等单位但没有 "
+                        "`excel_display_divisor` 时，数据才可能按该单位直接存储；"
+                        "结合 sample_rows 判断并在 stdout 说明采用的换算口径，不要只凭表头盲目缩放。",
+                    ]
+                )
         if has_column_families:
             lines.extend(
                 [
@@ -394,6 +439,36 @@ class PromptAssembler:
 
     def _has_column_families(self, tables: list[dict[str, Any]]) -> bool:
         return any(table.get("column_families") for table in tables)
+
+    def _has_multi_level_headers(self, tables: list[dict[str, Any]]) -> bool:
+        for table in tables:
+            for column in table.get("columns_detail") or []:
+                if not isinstance(column, dict):
+                    continue
+                path = column.get("header_path")
+                if isinstance(path, list) and len(path) > 1:
+                    return True
+        return False
+
+    _SCALE_TOKENS = (
+        "(000)", "(0000)", "(千)", "(万)", "(百万)", "(亿)",
+        "(thousand", "(million", "(billion",
+        "%", "‰",
+    )
+
+    def _has_scale_indicator_in_headers(self, tables: list[dict[str, Any]]) -> bool:
+        for table in tables:
+            for column in table.get("columns_detail") or []:
+                if not isinstance(column, dict):
+                    continue
+                path = column.get("header_path") or []
+                if not isinstance(path, list):
+                    continue
+                for level in path:
+                    normalized = str(level).lower()
+                    if any(token in normalized for token in self._SCALE_TOKENS):
+                        return True
+        return False
 
     def _has_rate_columns(self, tables: list[dict[str, Any]]) -> bool:
         names = self._profile_column_names(tables)

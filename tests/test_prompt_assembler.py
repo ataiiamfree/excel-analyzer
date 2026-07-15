@@ -298,6 +298,217 @@ def test_profile_prompt_explains_context_group_columns():
     assert "不要把 Unit/单位/计量单位列当作楼层或分组列" in prompt
 
 
+def test_profile_prompt_renders_header_path_when_multi_level():
+    step = Step(id="s1", tool="python", description="查询", instruction="按 Scotland 2023 求和")
+    context = TaskContext(
+        task_id="t1",
+        user_query="Compare Landings into Scotland vs England for 2023",
+        workbook_manifest={},
+        data_profile={
+            "tables": [
+                {
+                    "table_id": "Sheet1_t1",
+                    "source": "Sheet1!A1:E5",
+                    "path": "normalized/Sheet1_t1.parquet",
+                    "shape": {"rows": 2, "cols": 5},
+                    "columns_detail": [
+                        {
+                            "name": "Species",
+                            "dtype": "object",
+                            "header_path": ["Species"],
+                        },
+                        {
+                            "name": "2022",
+                            "dtype": "int64",
+                            "header_path": ["Landings into", "Scotland", "2022"],
+                        },
+                        {
+                            "name": "2023",
+                            "dtype": "int64",
+                            "header_path": ["Landings into", "Scotland", "2023"],
+                        },
+                        {
+                            "name": "2022_2",
+                            "dtype": "int64",
+                            "header_path": ["Landings into", "England", "2022"],
+                        },
+                        {
+                            "name": "2023_2",
+                            "dtype": "int64",
+                            "header_path": ["Landings into", "England", "2023"],
+                        },
+                    ],
+                    "columns_grouped": [],
+                }
+            ]
+        },
+        plan=ExecutionPlan([step]),
+    )
+
+    prompt = PromptAssembler().assemble(context, step)
+
+    # Multi-level columns get an inline lineage annotation
+    assert "2023(int64)[header_path: Landings into > Scotland > 2023]" in prompt
+    assert "2023_2(int64)[header_path: Landings into > England > 2023]" in prompt
+    # Single-level column stays compact — no header_path noise
+    assert "Species(object)" in prompt
+    assert "Species(object)[header_path" not in prompt
+    # Conditional hint kicks in
+    assert "header_path" in prompt
+    assert "Landings into > £(000) > 2008/09" in prompt or "顶级组 → 叶列" in prompt
+    assert "不要只匹配叶列名" in prompt
+
+
+def test_profile_prompt_adds_scale_indicator_hint_when_header_carries_unit():
+    step = Step(id="s1", tool="python", description="q", instruction="q")
+    context = TaskContext(
+        task_id="t1",
+        user_query="How many charities have fundraising over 10 million?",
+        workbook_manifest={},
+        data_profile={
+            "tables": [
+                {
+                    "table_id": "Sheet1_t1",
+                    "source": "Sheet1!A1:E5",
+                    "path": "normalized/Sheet1_t1.parquet",
+                    "shape": {"rows": 4, "cols": 5},
+                    "columns_detail": [
+                        {
+                            "name": "Charity",
+                            "dtype": "object",
+                            "header_path": ["Charity"],
+                        },
+                        {
+                            "name": "Total Fundraising_£(000)_2012/13",
+                            "dtype": "float64",
+                            "excel_display_divisor": 1000,
+                            "header_path": [
+                                "Total Fundraising",
+                                "£(000)",
+                                "2012/13",
+                            ],
+                        },
+                    ],
+                }
+            ]
+        },
+        plan=ExecutionPlan([step]),
+    )
+
+    prompt = PromptAssembler().assemble(context, step)
+
+    assert "display_only: shown=raw/1000" in prompt
+    assert "absolute_threshold: compare with raw directly" in prompt
+    assert "Excel显示值 = normalized原始值 / N" in prompt
+    assert "计划 instruction 和执行代码都不得" in prompt
+
+
+def test_profile_prompt_treats_unit_header_without_display_divisor_as_stored_unit():
+    step = Step(id="s1", tool="python", description="q", instruction="q")
+    context = TaskContext(
+        task_id="t1",
+        user_query="How many charities have fundraising over 10 million?",
+        workbook_manifest={},
+        data_profile={
+            "tables": [
+                {
+                    "table_id": "Sheet1_t1",
+                    "path": "normalized/Sheet1_t1.parquet",
+                    "columns_detail": [
+                        {
+                            "name": "Fundraising_£(000)_2012/13",
+                            "dtype": "float64",
+                            "header_path": ["Fundraising", "£(000)", "2012/13"],
+                        }
+                    ],
+                }
+            ]
+        },
+        plan=ExecutionPlan([step]),
+    )
+
+    prompt = PromptAssembler().assemble(context, step)
+
+    assert "数据才可能按该单位直接存储" in prompt
+    assert "结合 sample_rows 判断" in prompt
+
+
+def test_profile_prompt_omits_scale_hint_for_flat_headers_without_units():
+    step = Step(id="s1", tool="python", description="q", instruction="q")
+    context = TaskContext(
+        task_id="t1",
+        user_query="sum amounts",
+        workbook_manifest={},
+        data_profile={
+            "tables": [
+                {
+                    "table_id": "Sheet1_t1",
+                    "source": "Sheet1!A1:B3",
+                    "path": "normalized/Sheet1_t1.parquet",
+                    "shape": {"rows": 2, "cols": 2},
+                    "columns_detail": [
+                        {
+                            "name": "Name",
+                            "dtype": "object",
+                            "header_path": ["Name"],
+                        },
+                        {
+                            "name": "Amount",
+                            "dtype": "int64",
+                            "header_path": ["Amount"],
+                        },
+                    ],
+                }
+            ]
+        },
+        plan=ExecutionPlan([step]),
+    )
+
+    prompt = PromptAssembler().assemble(context, step)
+
+    assert "sample_rows 里的实际数值量级" not in prompt
+
+
+def test_profile_prompt_omits_header_path_hint_for_flat_tables():
+    step = Step(id="s1", tool="python", description="查询", instruction="求和")
+    context = TaskContext(
+        task_id="t1",
+        user_query="What is the total amount?",
+        workbook_manifest={},
+        data_profile={
+            "tables": [
+                {
+                    "table_id": "Sheet1_t1",
+                    "source": "Sheet1!A1:B3",
+                    "path": "normalized/Sheet1_t1.parquet",
+                    "shape": {"rows": 2, "cols": 2},
+                    "columns_detail": [
+                        {
+                            "name": "Name",
+                            "dtype": "object",
+                            "header_path": ["Name"],
+                        },
+                        {
+                            "name": "Amount",
+                            "dtype": "int64",
+                            "header_path": ["Amount"],
+                        },
+                    ],
+                }
+            ]
+        },
+        plan=ExecutionPlan([step]),
+    )
+
+    prompt = PromptAssembler().assemble(context, step)
+
+    assert "Name(object)" in prompt
+    assert "Amount(int64)" in prompt
+    # No header_path annotation, no hint — flat table stays flat
+    assert "[header_path:" not in prompt
+    assert "顶级组 → 叶列" not in prompt
+
+
 def test_python_prompt_includes_rate_hints_only_when_rate_columns_exist():
     step = Step(id="s1", tool="python", description="查询", instruction="查询增长率")
     context = TaskContext(

@@ -40,3 +40,106 @@ def test_autofilter_header_does_not_absorb_text_heavy_data_rows(tmp_path):
     table = manifest["files"][0]["sheets"][0]["tables"][0]
 
     assert table["header_candidates"] == [1]
+
+
+def test_scan_detects_multi_level_header_with_merged_parent_row(tmp_path):
+    """SheetBench 118 shape: parent group + unit row + leaf year row.
+
+    The parent group and unit rows use merged cells; without merge-aware
+    density detection, they look sparse and get skipped, collapsing the
+    three-level header into a single-row leaf.
+    """
+
+    workbook_path = tmp_path / "grouped_years.xlsx"
+    workbook = openpyxl.Workbook()
+    ws = workbook.active
+    ws.title = "Sheet1"
+
+    ws.append([None, "Total Fundraising", None, None, None, "Grant", None, None, None])
+    ws.merge_cells("B1:E1")
+    ws.merge_cells("F1:I1")
+    ws.append([None, "£(000)", None, None, None, "£(000)", None, None, None])
+    ws.merge_cells("B2:E2")
+    ws.merge_cells("F2:I2")
+    ws.append([
+        "Charity",
+        "2008/09", "2009/10", "2010/11", "2011/12",
+        "2008/09", "2009/10", "2010/11", "2011/12",
+    ])
+    ws.append(["British Museum", 100, 110, 120, 130, 10, 12, 14, 16])
+    ws.append(["Oxfam", 80, 90, 100, 110, 5, 6, 7, 8])
+    workbook.save(workbook_path)
+
+    manifest = WorkbookIngestor().scan(workbook_path)
+    table = manifest["files"][0]["sheets"][0]["tables"][0]
+
+    assert table["header_candidates"] == [1, 2, 3]
+
+
+def test_scan_extends_backwards_through_sparse_parent_rows(tmp_path):
+    """SheetBench 2292 shape: no merges, sparse parent-group rows.
+
+    Rows 1-3 are individually below the 40% density threshold, but they sit
+    consecutively above a valid leaf header (row 4). The ingestor should
+    walk upward from the first primary candidate and include them.
+    """
+
+    workbook_path = tmp_path / "sparse_headers.xlsx"
+    workbook = openpyxl.Workbook()
+    ws = workbook.active
+    ws.title = "PELAGIC"
+
+    ws.append([None, "Landings into", None, None, None, "Total landings", None])
+    ws.append([None, "Scotland", None, "England", None, "by UK vessels", None])
+    ws.append([None, None, None, "%", None, None, "%"])
+    ws.append(["Stock", 2022, 2023, "change", 2022, 2023, "change"])
+    ws.append(["NS Herring", 100, 110, -5.5, 200, 210, -3.2])
+    ws.append(["WC Mackerel", 300, 320, 6.7, 400, 420, 5.0])
+    workbook.save(workbook_path)
+
+    manifest = WorkbookIngestor().scan(workbook_path)
+    table = manifest["files"][0]["sheets"][0]["tables"][0]
+
+    assert table["header_candidates"] == [1, 2, 3, 4]
+
+
+def test_scan_treats_year_like_ints_as_header_text(tmp_path):
+    """Leaf year rows like `2022, 2023, 2024` should not be rejected as data."""
+
+    workbook_path = tmp_path / "year_header.xlsx"
+    workbook = openpyxl.Workbook()
+    ws = workbook.active
+    ws.title = "Sheet1"
+
+    ws.append(["Region", 2022, 2023, 2024])
+    ws.append(["Scotland", 100, 110, 120])
+    ws.append(["England", 200, 210, 220])
+    workbook.save(workbook_path)
+
+    manifest = WorkbookIngestor().scan(workbook_path)
+    table = manifest["files"][0]["sheets"][0]["tables"][0]
+
+    assert table["header_candidates"] == [1]
+
+
+def test_scan_ignores_single_value_title_row(tmp_path):
+    """A report title merged across all columns should not become a header."""
+
+    workbook_path = tmp_path / "title.xlsx"
+    workbook = openpyxl.Workbook()
+    ws = workbook.active
+    ws.title = "Sheet1"
+
+    ws.append(["Annual Report 2025", None, None, None])
+    ws.merge_cells("A1:D1")
+    ws.append([None, None, None, None])
+    ws.append(["Item", "Category", "Amount", "Note"])
+    ws.append(["A", "X", 100, "ok"])
+    ws.append(["B", "Y", 200, "ok"])
+    workbook.save(workbook_path)
+
+    manifest = WorkbookIngestor().scan(workbook_path)
+    table = manifest["files"][0]["sheets"][0]["tables"][0]
+
+    # Row 1 title is rejected; the real single-level header at row 3 is picked.
+    assert table["header_candidates"] == [3]
