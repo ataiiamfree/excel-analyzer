@@ -23,7 +23,12 @@ def get_artifact_path(artifact_id: str, store: Store, config: Config) -> tuple[d
         artifact = store.get_artifact(artifact_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="产物不存在") from exc
-    path = resolve_artifact_path(artifact, config.workspace_dir)
+    try:
+        path = resolve_artifact_path(artifact, config.workspace_dir)
+    except ValueError as exc:
+        # Containment guard tripped — treat as not-found so we never disclose
+        # whether the escape target exists on disk.
+        raise HTTPException(status_code=404, detail="产物不存在") from exc
     if not path.exists() or not path.is_file():
         raise HTTPException(status_code=404, detail="产物文件不存在")
     return artifact, path

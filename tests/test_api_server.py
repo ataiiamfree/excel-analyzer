@@ -111,3 +111,71 @@ def test_replacing_file_preserves_conversation_title(monkeypatch):
     assert result.title == "按季度分析销售趋势"
     assert result.file_name == "new.xlsx"
     assert "title" not in store.updated_values
+
+
+def _write_index(web_dist):
+    web_dist.mkdir(parents=True, exist_ok=True)
+    (web_dist / "assets").mkdir(exist_ok=True)
+    (web_dist / "index.html").write_text("<html>spa</html>", encoding="utf-8")
+
+
+def test_spa_fallback_serves_index_for_unknown_route(tmp_path, monkeypatch):
+    web_dist = tmp_path / "web-dist"
+    _write_index(web_dist)
+    monkeypatch.setattr(server.config, "web_dist_dir", str(web_dist))
+    from importlib import reload
+    from app.api import server as _server
+    reload(_server)
+    try:
+        response = TestClient(_server.app).get("/does-not-exist")
+        assert response.status_code == 200
+        assert "<html>" in response.text
+    finally:
+        # restore original module for other tests
+        reload(server)
+
+
+def test_spa_fallback_rejects_encoded_traversal(tmp_path, monkeypatch):
+    """SPA fallback must never leak files outside the built SPA directory."""
+    web_dist = tmp_path / "web-dist"
+    _write_index(web_dist)
+    secret = tmp_path / "secret.txt"
+    secret.write_text("SECRET-DEEPSEEK-API-KEY", encoding="utf-8")
+
+    monkeypatch.setattr(server.config, "web_dist_dir", str(web_dist))
+    from importlib import reload
+    from app.api import server as _server
+    reload(_server)
+    client = TestClient(_server.app)
+    try:
+        # url-decoded `..` (which Starlette normalizes) and url-encoded `..`
+        # (which Starlette forwards raw) both need to be contained.
+        for attack in [
+            "/%2e%2e/secret.txt",
+            "/..%2fsecret.txt",
+            "/foo/..%2f..%2fsecret.txt",
+            "/%2e%2e/%2e%2e/etc/passwd",
+        ]:
+            response = client.get(attack)
+            # Either 200 with SPA index or something benign — never the secret.
+            assert "SECRET-DEEPSEEK-API-KEY" not in response.text, (
+                f"path traversal succeeded for {attack!r}"
+            )
+    finally:
+        reload(server)
+
+
+def test_spa_fallback_rejects_absolute_paths(tmp_path, monkeypatch):
+    web_dist = tmp_path / "web-dist"
+    _write_index(web_dist)
+    monkeypatch.setattr(server.config, "web_dist_dir", str(web_dist))
+    from importlib import reload
+    from app.api import server as _server
+    reload(_server)
+    try:
+        # Absolute URL segments should never escape the SPA either.
+        response = TestClient(_server.app).get("//etc/hosts")
+        assert "127.0.0.1" not in response.text
+        assert "<html>" in response.text
+    finally:
+        reload(server)
