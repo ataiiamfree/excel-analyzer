@@ -381,6 +381,7 @@ def test_profile_prompt_adds_scale_indicator_hint_when_header_carries_unit():
                         {
                             "name": "Total Fundraising_£(000)_2012/13",
                             "dtype": "float64",
+                            "excel_display_divisor": 1000,
                             "header_path": [
                                 "Total Fundraising",
                                 "£(000)",
@@ -396,8 +397,40 @@ def test_profile_prompt_adds_scale_indicator_hint_when_header_carries_unit():
 
     prompt = PromptAssembler().assemble(context, step)
 
-    assert "sample_rows 里的实际数值量级" in prompt
-    assert "重复缩放" in prompt
+    assert "display_only: shown=raw/1000" in prompt
+    assert "absolute_threshold: compare with raw directly" in prompt
+    assert "Excel显示值 = normalized原始值 / N" in prompt
+    assert "计划 instruction 和执行代码都不得" in prompt
+
+
+def test_profile_prompt_treats_unit_header_without_display_divisor_as_stored_unit():
+    step = Step(id="s1", tool="python", description="q", instruction="q")
+    context = TaskContext(
+        task_id="t1",
+        user_query="How many charities have fundraising over 10 million?",
+        workbook_manifest={},
+        data_profile={
+            "tables": [
+                {
+                    "table_id": "Sheet1_t1",
+                    "path": "normalized/Sheet1_t1.parquet",
+                    "columns_detail": [
+                        {
+                            "name": "Fundraising_£(000)_2012/13",
+                            "dtype": "float64",
+                            "header_path": ["Fundraising", "£(000)", "2012/13"],
+                        }
+                    ],
+                }
+            ]
+        },
+        plan=ExecutionPlan([step]),
+    )
+
+    prompt = PromptAssembler().assemble(context, step)
+
+    assert "数据才可能按该单位直接存储" in prompt
+    assert "结合 sample_rows 判断" in prompt
 
 
 def test_profile_prompt_omits_scale_hint_for_flat_headers_without_units():

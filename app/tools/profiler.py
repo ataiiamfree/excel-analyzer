@@ -22,8 +22,14 @@ class Profiler:
     def _profile_table(self, table: NormalizedTable) -> dict[str, Any]:
         df = self._read_table(table)
         visible_columns = [col for col in df.columns if not str(col).startswith("_source_")]
+        source_metadata = {
+            str(item.get("name")): item
+            for item in table.columns
+            if isinstance(item, dict) and item.get("name")
+        }
         columns_info = [
-            self._profile_column(df, col, table.header_paths) for col in visible_columns
+            self._profile_column(df, col, table.header_paths, source_metadata)
+            for col in visible_columns
         ]
         grouped, detail = self._group_similar_columns(columns_info)
         column_families = self._detect_column_families(columns_info)
@@ -53,15 +59,20 @@ class Profiler:
         df: pd.DataFrame,
         col: str,
         header_paths: dict[str, list[str]] | None = None,
+        source_metadata: dict[str, dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         series = df[col]
-        path = (header_paths or {}).get(col) or [col]
+        source = (source_metadata or {}).get(str(col)) or {}
+        path = source.get("header_path") or (header_paths or {}).get(col) or [col]
         info: dict[str, Any] = {
             "name": col,
             "dtype": str(series.dtype),
             "null_pct": round(float(series.isna().mean()), 3),
             "header_path": list(path),
         }
+        for field in ("excel_number_formats", "excel_display_divisor"):
+            if field in source:
+                info[field] = source[field]
         if pd.api.types.is_numeric_dtype(series):
             non_null = series.dropna()
             if not non_null.empty:

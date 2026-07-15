@@ -7,6 +7,7 @@ business data is not excluded unless the evidence is stronger than a keyword.
 from __future__ import annotations
 
 import re
+from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -235,9 +236,25 @@ class ExcelPreprocessor:
             raw_paths=raw_header_paths,
             dataframe_columns=[str(col) for col in dataframe.columns],
         )
+        column_formats = self._build_column_format_metadata(
+            worksheet=worksheet,
+            rows=rows,
+            row_flags=row_flags,
+            headers=headers,
+            min_row=min_row,
+            min_col=min_col,
+            header_rel=header_rel,
+            data_end=data_end,
+        )
 
         columns = [
-            self._column_metadata(dataframe, str(col), enum_columns, header_paths)
+            self._column_metadata(
+                dataframe,
+                str(col),
+                enum_columns,
+                header_paths,
+                column_formats,
+            )
             for col in dataframe.columns
         ]
         return NormalizedTable(
@@ -366,12 +383,103 @@ class ExcelPreprocessor:
         column: str,
         enum_columns: dict[str, list[str]],
         header_paths: dict[str, list[str]],
+        column_formats: dict[str, dict[str, Any]],
     ) -> dict[str, Any]:
         metadata: dict[str, Any] = {"name": column, "dtype": str(dataframe[column].dtype)}
         if column in enum_columns:
             metadata["enum_values"] = enum_columns[column]
         metadata["header_path"] = list(header_paths.get(column) or [column])
+        metadata.update(column_formats.get(column) or {})
         return metadata
+
+    def _build_column_format_metadata(
+        self,
+        *,
+        worksheet: Any,
+        rows: list[list[Any]],
+        row_flags: dict[int, dict[str, Any]],
+        headers: list[str],
+        min_row: int,
+        min_col: int,
+        header_rel: int,
+        data_end: int,
+    ) -> dict[str, dict[str, Any]]:
+        """Preserve Excel display scaling without changing stored values.
+
+        A trailing comma in an Excel number format divides the displayed value
+        by 1,000. Normalized tables retain the raw stored value, so downstream
+        analysis needs this metadata to avoid applying the display scaling a
+        second time merely because a header also says ``(000)``.
+        """
+        metadata: dict[str, dict[str, Any]] = {}
+        for column_offset, header in enumerate(headers):
+            formats: list[str] = []
+            numeric_count = 0
+            for rel_idx in range(header_rel + 1, data_end + 1):
+                if row_flags.get(rel_idx, {}).get("exclude"):
+                    continue
+                row = rows[rel_idx - 1] if rel_idx - 1 < len(rows) else []
+                value = row[column_offset] if column_offset < len(row) else None
+                if isinstance(value, bool) or not isinstance(value, (int, float)):
+                    continue
+                numeric_count += 1
+                cell = worksheet.cell(
+                    row=min_row + rel_idx - 1,
+                    column=min_col + column_offset,
+                )
+                number_format = str(cell.number_format or "General")
+                if number_format.lower() != "general":
+                    formats.append(number_format)
+
+            if not formats:
+                continue
+            counts = Counter(formats)
+            dominant_format, dominant_count = counts.most_common(1)[0]
+            column_metadata: dict[str, Any] = {
+                "excel_number_formats": [
+                    number_format for number_format, _ in counts.most_common(3)
+                ]
+            }
+            display_divisor = self._excel_display_divisor(dominant_format)
+            if (
+                display_divisor > 1
+                and numeric_count > 0
+                and dominant_count / numeric_count >= 0.8
+            ):
+                column_metadata["excel_display_divisor"] = display_divisor
+            metadata[header] = column_metadata
+        return metadata
+
+    def _excel_display_divisor(self, number_format: str) -> int:
+        """Return the display-only divisor encoded by trailing format commas."""
+        section = str(number_format or "").split(";", 1)[0]
+        cleaned: list[str] = []
+        index = 0
+        while index < len(section):
+            char = section[index]
+            if char == '"':
+                index += 1
+                while index < len(section) and section[index] != '"':
+                    index += 1
+            elif char == "[":
+                index += 1
+                while index < len(section) and section[index] != "]":
+                    index += 1
+            elif char in {"\\", "_", "*"}:
+                index += 1
+            else:
+                cleaned.append(char)
+            index += 1
+
+        compact = "".join(cleaned)
+        placeholders = [
+            index for index, char in enumerate(compact) if char in {"0", "#", "?"}
+        ]
+        if not placeholders:
+            return 1
+        trailing = compact[placeholders[-1] + 1 :]
+        comma_count = trailing.count(",")
+        return 1000 ** comma_count
 
     def _build_header_paths(
         self,

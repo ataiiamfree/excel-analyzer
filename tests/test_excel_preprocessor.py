@@ -5,6 +5,7 @@ import pandas as pd
 
 from app.tools.excel_preprocessor import ExcelPreprocessor
 from app.tools.profiler import Profiler
+from app.tools.workbook_ingestor import WorkbookIngestor
 
 
 def test_summary_keyword_inside_business_value_is_not_auto_excluded():
@@ -746,6 +747,37 @@ def test_process_populates_trivial_header_path_for_single_level_tables(tmp_path)
     assert table.header_paths["Amount"] == ["Amount"]
     for col_meta in table.columns:
         assert col_meta["header_path"] == [col_meta["name"]]
+
+
+def test_process_distinguishes_excel_display_scaling_from_stored_thousands(tmp_path):
+    workbook_path = tmp_path / "display_scale.xlsx"
+    workbook = openpyxl.Workbook()
+    ws = workbook.active
+    ws.title = "Sheet1"
+    ws.append(["Museum", "Full value", "Stored thousands"])
+    ws.append(["A", 8_955_000, 8_955])
+    ws.append(["B", 13_555_000, 13_555])
+    for row in range(2, 4):
+        ws.cell(row, 2).number_format = "#,##0,"
+        ws.cell(row, 3).number_format = "#,##0"
+    workbook.save(workbook_path)
+
+    manifest = WorkbookIngestor().scan(workbook_path)
+    table = ExcelPreprocessor().process(workbook_path, manifest).tables[0]
+    metadata = {item["name"]: item for item in table.columns}
+
+    assert metadata["Full value"]["excel_number_formats"] == ["#,##0,"]
+    assert metadata["Full value"]["excel_display_divisor"] == 1000
+    assert metadata["Stored thousands"]["excel_number_formats"] == ["#,##0"]
+    assert "excel_display_divisor" not in metadata["Stored thousands"]
+
+
+def test_excel_display_divisor_ignores_grouping_commas_and_literals():
+    preprocessor = ExcelPreprocessor()
+
+    assert preprocessor._excel_display_divisor("#,##0") == 1
+    assert preprocessor._excel_display_divisor("#,##0,") == 1000
+    assert preprocessor._excel_display_divisor('"£"#,##0,, "m"') == 1_000_000
 
 
 def test_process_records_enum_and_oversized_metadata_without_truncating_data(tmp_path):

@@ -221,6 +221,8 @@ class Orchestrator:
             ])
 
         profile_text = self.assembler.format_profile_for_prompt(context.data_profile)
+        profile_hints = self.assembler.format_profile_hints_for_prompt(context.data_profile)
+        profile_hint_section = f"{profile_hints}\n" if profile_hints else ""
         tool_prompt = self.tool_registry.planner_prompt(context.selected_skill)
         skill_section = context.skill_instructions
 
@@ -240,6 +242,7 @@ class Orchestrator:
             f"## 用户需求\n{context.user_query}\n\n"
             f"## Skill 约束\n{skill_section}\n\n"
             f"## 数据概况\n{profile_text}\n"
+            f"{profile_hint_section}"
             f"{follow_up_section}\n"
             f"## 可用工具\n{tool_prompt}\n\n"
             "## 输出格式\n"

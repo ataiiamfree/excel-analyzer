@@ -284,6 +284,10 @@ class PromptAssembler:
                 lines.append(f"   warnings: {'; '.join(map(str, warnings[:3]))}")
         return "\n".join(lines)
 
+    def format_profile_hints_for_prompt(self, profile: dict[str, Any]) -> str:
+        """Return conditional structural hints shared by planner and executor."""
+        return self._format_profile_hints(profile)
+
     def _compact_columns(self, table: dict[str, Any]) -> list[str]:
         columns: list[str] = []
         for item in table.get("columns_detail") or []:
@@ -292,11 +296,19 @@ class PromptAssembler:
                 continue
             dtype = item.get("dtype", "?")
             path = item.get("header_path") or []
+            display_divisor = item.get("excel_display_divisor")
             if isinstance(path, list) and len(path) > 1:
                 lineage = " > ".join(str(p) for p in path)
-                columns.append(f"{name}({dtype})[header_path: {lineage}]")
+                suffix = f"[header_path: {lineage}]"
             else:
-                columns.append(f"{name}({dtype})")
+                suffix = ""
+            if isinstance(display_divisor, (int, float)) and display_divisor > 1:
+                suffix += (
+                    f"[normalized_value: raw Excel value; "
+                    f"display_only: shown=raw/{display_divisor:g}; "
+                    "absolute_threshold: compare with raw directly]"
+                )
+            columns.append(f"{name}({dtype}){suffix}")
 
         for group in table.get("columns_grouped") or []:
             pattern = group.get("pattern")
@@ -361,10 +373,17 @@ class PromptAssembler:
                 ]
             )
             if has_scale_hint:
-                lines.append(
-                    "- header_path 里出现 `(000)`、`(千)`、`(millions)`、`%` 等单位/比例标记时，"
-                    "**必须先看 sample_rows 里的实际数值量级再判断是否需要缩放**——"
-                    "很多工作簿标注了单位但数据仍按原量级存放；按标签重复缩放会导致阈值/比较错误。"
+                lines.extend(
+                    [
+                        "- normalized 表保留 Excel 原始存储值，不会套用单元格显示格式。"
+                        "某列有 `excel_display_divisor: N` 时，公式是 `Excel显示值 = normalized原始值 / N`；"
+                        "normalized 原始值已经是实际存储金额，绝对金额阈值必须直接与它比较。"
+                        "计划 instruction 和执行代码都不得因该元数据或 `(000)` 表头"
+                        "再乘/除 normalized 值或阈值。",
+                        "- header_path 有 `(000)`、`(千)`、`(millions)` 等单位但没有 "
+                        "`excel_display_divisor` 时，数据才可能按该单位直接存储；"
+                        "结合 sample_rows 判断并在 stdout 说明采用的换算口径，不要只凭表头盲目缩放。",
+                    ]
                 )
         if has_column_families:
             lines.extend(

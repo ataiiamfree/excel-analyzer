@@ -88,3 +88,32 @@ def test_profiler_exposes_header_path_and_keeps_multi_level_columns_ungrouped(tm
     ]
     assert detail_by_name["Species"]["header_path"] == ["Species"]
     assert profile["columns_grouped"] == []
+
+
+def test_profiler_exposes_excel_display_divisor(tmp_path):
+    path = tmp_path / "amounts.xlsx"
+    pd.DataFrame({"Amount": [8_955_000, 13_555_000]}).to_excel(path, index=False)
+    table = NormalizedTable(
+        table_id="Sheet1_t1",
+        source_file="book.xlsx",
+        source_sheet="Sheet1",
+        source_range="A1:A3",
+        parquet_path=str(path),
+        preview_xlsx_path=str(path),
+        columns=[
+            {
+                "name": "Amount",
+                "dtype": "int64",
+                "header_path": ["Fundraising", "£(000)", "Amount"],
+                "excel_number_formats": ["#,##0,"],
+                "excel_display_divisor": 1000,
+            }
+        ],
+        row_count=2,
+    )
+
+    detail = Profiler().profile([table])["tables"][0]["columns_detail"][0]
+
+    assert detail["header_path"] == ["Fundraising", "£(000)", "Amount"]
+    assert detail["excel_number_formats"] == ["#,##0,"]
+    assert detail["excel_display_divisor"] == 1000
