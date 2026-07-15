@@ -845,6 +845,66 @@ def test_planner_prompt_includes_excel_display_scaling_semantics():
     assert "计划 instruction 和执行代码都不得" in llm.prompt
 
 
+def test_planner_prompt_names_only_query_matched_column_family():
+    class RecordingLLM:
+        def __init__(self):
+            self.prompt = ""
+
+        async def call(self, prompt, **kwargs):
+            self.prompt = prompt
+            return json.dumps({
+                "steps": [
+                    {
+                        "id": "s1",
+                        "tool": "python",
+                        "description": "find the measurement",
+                        "instruction": "inspect all measurement members and choose by table semantics",
+                    }
+                ],
+                "report_outline": [],
+            })
+
+    llm = RecordingLLM()
+    orch = Orchestrator(llm_client=llm, tools=None, config=_make_config())
+    context = TaskContext(
+        "t1",
+        "What was the measurement for this row?",
+        {},
+        {
+            "tables": [
+                {
+                    "table_id": "Sheet1_t1",
+                    "path": "normalized/Sheet1_t1.xlsx",
+                    "column_families": [
+                        {
+                            "base": "measurement",
+                            "kind": "ordered_header_members",
+                            "columns": [
+                                "measurement_1",
+                                "measurement_2",
+                                "measurement_3",
+                            ],
+                        },
+                        {
+                            "base": "rate",
+                            "kind": "ordered_header_members",
+                            "columns": ["rate_1", "rate_2", "rate_3"],
+                        },
+                    ],
+                }
+            ]
+        },
+    )
+
+    asyncio.run(orch._plan(context, Session(session_id="s1", file_path="input.xlsx")))
+
+    assert "## 当前问题相关列族" in llm.prompt
+    assert "当前问题命中列族 `measurement`" in llm.prompt
+    assert "measurement_1, measurement_2, measurement_3" in llm.prompt
+    assert "当前问题命中列族 `rate`" not in llm.prompt
+    assert "计划和生成代码必须保留并读取全部成员" in llm.prompt
+
+
 def test_execute_artifact_qa_uses_manifest_and_script():
     step = Step(id="s1", tool="artifact_qa", description="解释产物", instruction="解释 trend.png")
     context = TaskContext("t1", "解释 trend.png", {}, {})

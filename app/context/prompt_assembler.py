@@ -41,7 +41,10 @@ class PromptAssembler:
         check_report: str | None = None,
         stdout: str | None = None,
     ) -> str:
-        task_hints = self._format_python_task_hints(context.data_profile)
+        task_hints = self._format_python_task_hints(
+            context.data_profile,
+            context.user_query,
+        )
         parts = [
             "代码执行或结果校验失败，请修正。只输出完整 Python 脚本，不要解释。\n"
             "重要：如果报错是 ModuleNotFoundError（模块未安装），你必须改用已安装的库来实现同样的功能，"
@@ -132,7 +135,10 @@ class PromptAssembler:
             ),
             PromptSection(
                 "task_hints",
-                self._format_python_task_hints(context.data_profile)
+                self._format_python_task_hints(
+                    context.data_profile,
+                    context.user_query,
+                )
                 if current_step.tool == "python"
                 else "",
                 True,
@@ -293,6 +299,18 @@ class PromptAssembler:
         """Return conditional structural hints shared by planner and executor."""
         return self._format_profile_hints(profile)
 
+    def format_query_matched_column_family_hints_for_prompt(
+        self,
+        profile: dict[str, Any],
+        user_query: str,
+    ) -> str:
+        """Return only column-family guidance that is relevant to this query."""
+        tables = profile.get("tables", []) if isinstance(profile, dict) else []
+        lines = self._query_matched_column_family_hint_lines(tables, user_query)
+        if not lines:
+            return ""
+        return "## 当前问题相关列族\n" + "\n".join(f"- {line}" for line in lines)
+
     def _compact_columns(self, table: dict[str, Any]) -> list[str]:
         columns: list[str] = []
         for item in table.get("columns_detail") or []:
@@ -400,7 +418,11 @@ class PromptAssembler:
             )
         return "\n".join(lines)
 
-    def _format_python_task_hints(self, profile: dict[str, Any]) -> str:
+    def _format_python_task_hints(
+        self,
+        profile: dict[str, Any],
+        user_query: str = "",
+    ) -> str:
         tables = profile.get("tables", []) if isinstance(profile, dict) else []
         if not tables:
             return ""
@@ -420,6 +442,9 @@ class PromptAssembler:
                     "如果用户没有明确指定第几列/第几次，stdout 中应打印候选列和选择依据。",
                 ]
             )
+            lines.extend(
+                self._query_matched_column_family_hint_lines(tables, user_query)
+            )
         if self._has_rate_columns(tables):
             lines.append(
                 "处理 rate/ratio/percentage/growth 字段时，不要仅因为数值绝对值大于 1 就除以 100；只有列名/单位明确含 % 或样例显示 whole-percent 口径时才转换。"
@@ -434,6 +459,47 @@ class PromptAssembler:
         if not lines:
             return ""
         return "## Python 任务提示\n" + "\n".join(f"- {line}" for line in lines)
+
+    def _query_matched_column_family_hint_lines(
+        self,
+        tables: list[dict[str, Any]],
+        user_query: str,
+    ) -> list[str]:
+        lines: list[str] = []
+        for base, columns in self._query_matched_column_families(tables, user_query):
+            column_text = ", ".join(columns[:8])
+            suffix = ", ..." if len(columns) > 8 else ""
+            lines.append(
+                f"当前问题命中列族 `{base}`: [{column_text}{suffix}]。"
+                "计划和生成代码必须保留并读取全部成员，再按用户指定的序号/标签或表格语义选择；"
+                "不得只访问未带后缀的第一个成员，也不要预设 max/min。"
+            )
+        return lines
+
+    def _query_matched_column_families(
+        self,
+        tables: list[dict[str, Any]],
+        user_query: str,
+    ) -> list[tuple[str, list[str]]]:
+        query = str(user_query or "").casefold()
+        if not query:
+            return []
+        matches: list[tuple[str, list[str]]] = []
+        seen: set[tuple[str, tuple[str, ...]]] = set()
+        for table in tables:
+            for family in table.get("column_families") or []:
+                base = str(family.get("base") or "").strip()
+                columns = [str(item) for item in family.get("columns") or [] if item]
+                if len(base) < 2 or len(columns) < 2:
+                    continue
+                if not re.search(rf"(?<!\w){re.escape(base.casefold())}(?!\w)", query):
+                    continue
+                key = (base.casefold(), tuple(columns))
+                if key in seen:
+                    continue
+                seen.add(key)
+                matches.append((base, columns))
+        return matches
 
     def _has_context_columns(self, tables: list[dict[str, Any]]) -> bool:
         return any(
