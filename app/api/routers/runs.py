@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 
 from app.api.deps import get_config, get_run_registry, get_store
 from app.api.persistence.store import Store
+from app.api.uploads import save_validated_excel
 from app.api.ws.runner import run_ephemeral_query
 from app.config import Config
 from app.workspace import Workspace
@@ -21,9 +22,7 @@ def save_ephemeral_upload(upload: UploadFile, config: Config) -> str:
     run_id = f"run_{uuid.uuid4().hex}"
     workspace = Workspace(root=config.workspace_dir, task_id=run_id)
     target = Path(workspace.path) / "raw" / Path(upload.filename or "upload.xlsx").name
-    with target.open("wb") as fh:
-        while chunk := upload.file.read(1024 * 1024):
-            fh.write(chunk)
+    save_validated_excel(upload, target, max_size_mb=config.max_file_size_mb)
     return str(target.resolve())
 
 

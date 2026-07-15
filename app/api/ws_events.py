@@ -84,10 +84,17 @@ class RunFailedEvent(ServerEvent):
     type: Literal["run.failed"] = "run.failed"
     failed_step_description: str
     error_summary: str
+    error_kind: Literal["timeout", "rate_limit", "analysis_failed", "other"] = "other"
 
 
 class CancelledEvent(ServerEvent):
     type: Literal["cancelled"] = "cancelled"
+
+
+class ClientErrorEvent(ServerEvent):
+    type: Literal["error"] = "error"
+    error_kind: Literal["invalid_message", "run_in_progress", "no_active_run"]
+    summary: str
 
 
 class ClientEvent(BaseModel):
