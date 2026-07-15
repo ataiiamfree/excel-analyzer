@@ -143,3 +143,21 @@ def test_scan_ignores_single_value_title_row(tmp_path):
 
     # Row 1 title is rejected; the real single-level header at row 3 is picked.
     assert table["header_candidates"] == [3]
+
+
+def test_scan_deep_header_cap_preserves_leaf_row(tmp_path):
+    workbook_path = tmp_path / "deep_header.xlsx"
+    workbook = openpyxl.Workbook()
+    ws = workbook.active
+    ws.title = "Sheet1"
+
+    for level in range(1, 7):
+        ws.append([f"Group {level}A", f"Group {level}B"])
+    ws.append(["Item", "Amount"])
+    ws.append(["A", 100])
+    workbook.save(workbook_path)
+
+    manifest = WorkbookIngestor().scan(workbook_path)
+    table = manifest["files"][0]["sheets"][0]["tables"][0]
+
+    assert table["header_candidates"] == [2, 3, 4, 5, 6, 7]

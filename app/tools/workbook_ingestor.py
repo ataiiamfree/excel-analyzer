@@ -288,7 +288,10 @@ class WorkbookIngestor:
                     break
                 candidates.insert(0, row_idx)
 
-        return candidates[:6] or [min_row]
+        # Cap very deep report headers without discarding the leaf row. The
+        # leaf carries the actual field names; clipping from the end would keep
+        # distant report metadata while turning the leaf into a data record.
+        return candidates[-6:] or [min_row]
 
     def _is_year_like_int(self, value: Any) -> bool:
         if not isinstance(value, int) or isinstance(value, bool):
