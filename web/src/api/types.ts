@@ -51,7 +51,7 @@ export interface PlanStep {
 
 export interface StepRecord {
   step_id: string;
-  status: "pending" | "running" | "done" | "failed";
+  status: "pending" | "running" | "done" | "failed" | "cancelled";
   started_at?: string;
   ended_at?: string;
   stdout?: string;

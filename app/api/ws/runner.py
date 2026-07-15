@@ -315,8 +315,18 @@ async def _run_query(
             timeout=config.run_timeout_seconds,
         )
     except asyncio.CancelledError:
+        ended_at = utc_now()
+        for record in payload["steps"]:
+            if record["status"] == "running":
+                record.update({"status": "cancelled", "ended_at": ended_at.isoformat()})
         payload["status"] = "cancelled"
-        payload["metrics"]["ended_at"] = utc_now().isoformat()
+        payload["metrics"].update(
+            {
+                "duration_ms": int((ended_at - started_at).total_seconds() * 1000),
+                "ended_at": ended_at.isoformat(),
+                "user_message_id": user_message_id,
+            }
+        )
         await persist_payload()
         await emitter.emit(CancelledEvent(seq=0))
         raise

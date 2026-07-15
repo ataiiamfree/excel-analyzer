@@ -19,6 +19,8 @@ interface MessageAssistantProps {
 
 function timeLabel(payload: AssistantMessagePayload, createdAt?: string, live?: boolean) {
   if (live || payload.status === "running") return "正在分析...";
+  if (payload.status === "cancelled") return "已取消";
+  if (payload.status === "failed") return "分析失败";
   const duration = Number(payload.metrics?.duration_ms ?? 0);
   if (duration > 0) return `用时 ${(duration / 1000).toFixed(1)}s`;
   if (createdAt) return new Date(createdAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
@@ -149,6 +151,12 @@ export default function MessageAssistant({
         <div className="progress-line">
           <span />
           <span>{payload.error.summary}</span>
+        </div>
+      ) : null}
+      {payload.status === "cancelled" ? (
+        <div className="progress-line cancelled" role="status">
+          <span />
+          <span>分析已取消，可以继续提问或重新生成。</span>
         </div>
       ) : null}
       <ArtifactChips artifacts={visibleArtifacts} />

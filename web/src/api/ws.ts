@@ -98,7 +98,15 @@ function reduceEvent(payload: AssistantMessagePayload | null, event: ServerEvent
     };
   }
   if (event.type === "cancelled") {
-    return { ...payload, status: "cancelled" };
+    return {
+      ...payload,
+      status: "cancelled",
+      steps: payload.steps.map((step) =>
+        step.status === "running"
+          ? { ...step, status: "cancelled", ended_at: event.ts }
+          : step
+      )
+    };
   }
   return payload;
 }

@@ -212,6 +212,7 @@ a { color: inherit; text-decoration: none; }
 .step .marker { width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; font-family: var(--mono); font-size: 10.5px; font-weight: 600; background: var(--bg-tint); color: var(--ink-3); border: 1px solid var(--rule-2); margin-top: 1px; }
 .step.done .marker { background: var(--jade); color: #fff; border-color: var(--jade); }
 .step.failed .marker { background: var(--accent); color: #fff; border-color: var(--accent); }
+.step.cancelled .marker { background: var(--amber-soft); color: var(--amber); border-color: #e8d8a8; }
 .step.running .marker { background: var(--accent); color: #fff; border-color: var(--accent); box-shadow: 0 0 0 4px rgba(181,59,30,.12); }
 .step.pending .marker { color: var(--ink-4); }
 .step .body .label { font-size: 13.5px; font-weight: 500; color: var(--ink); }
@@ -230,6 +231,7 @@ a { color: inherit; text-decoration: none; }
 .step-detail .out { margin-top: 6px; padding-top: 6px; border-top: 1px dashed var(--rule); white-space: pre-wrap; color: var(--ink-3); line-height: 1.55; max-height: 180px; overflow: auto; }
 .progress-line { display: flex; align-items: center; gap: 10px; margin: 14px 0 0; padding: 9px 12px; background: var(--accent-soft); border: 1px solid #ebc9bd; border-radius: 8px; font-size: 12.5px; color: var(--accent-2); }
 .progress-line .spin { width: 12px; height: 12px; border-radius: 50%; border: 1.5px solid #e0b0a2; border-top-color: var(--accent); animation: spin 1s linear infinite; flex: none; }
+.progress-line.cancelled { background: var(--amber-soft); border-color: #e8d8a8; color: #5c4413; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
 .report { margin-top: 18px; background: var(--bg-elev); border: 1px solid var(--rule); border-radius: 14px; padding: 24px 28px 22px; box-shadow: var(--shadow-card); position: relative; }

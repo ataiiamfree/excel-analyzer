@@ -31,7 +31,13 @@ export default function StepItem({ index, step, record }: StepItemProps) {
         </div>
       </div>
       <div className="timing">
-        {status === "running" ? <span className="pulse">执行中</span> : <span>{duration(record)}</span>}
+        {status === "running" ? (
+          <span className="pulse">执行中</span>
+        ) : status === "cancelled" ? (
+          <span>已取消</span>
+        ) : (
+          <span>{duration(record)}</span>
+        )}
         {record?.artifact_ids.length ? <span>{record.artifact_ids.length} artifacts</span> : null}
       </div>
       {record && (record.stdout || record.error || record.script_path) ? (

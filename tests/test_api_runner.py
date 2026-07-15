@@ -1,9 +1,12 @@
 import asyncio
 from types import SimpleNamespace
 
+import pytest
+
 from app.api.deps import SessionRegistry
 from app.api.persistence.store import Store
 from app.api.ws import runner
+from app.agent.plan import ExecutionPlan, Step
 from app.config import Config
 
 
@@ -33,6 +36,23 @@ class LongReasoningRuntime:
     async def run(self, request):
         await request.callbacks["on_reasoning_token"]("x" * 25_000)
         return SimpleNamespace(failed=False, report="完成", files=[])
+
+
+class CancellableRuntime:
+    def __init__(self, started: asyncio.Event):
+        self.started = started
+
+    async def run(self, request):
+        step = Step(
+            id="step-1",
+            tool="python",
+            description="统计数据",
+            instruction="统计数据",
+        )
+        await request.callbacks["on_plan_ready"](ExecutionPlan(steps=[step]))
+        await request.callbacks["on_step_start"](step, 1, 1)
+        self.started.set()
+        await asyncio.Event().wait()
 
 
 def test_run_conversation_persists_client_message_id(tmp_path, monkeypatch):
@@ -130,3 +150,46 @@ def test_reasoning_persistence_is_bounded(tmp_path, monkeypatch):
 
     assert len(result.reasoning["text"]) == runner.MAX_PERSISTED_REASONING_CHARS
     assert result.reasoning["tokens"] == 6_250
+
+
+def test_cancelled_run_marks_running_step_cancelled(tmp_path, monkeypatch):
+    store = Store(tmp_path / "chat.sqlite3")
+    source = tmp_path / "source.xlsx"
+    source.write_bytes(b"xlsx")
+    store.create_conversation(
+        conversation_id="conversation_1",
+        title="取消测试",
+        file_name="source.xlsx",
+        file_size=source.stat().st_size,
+        local_file_path=str(source),
+    )
+    config = Config(
+        workspace_dir=str(tmp_path / "workspace"),
+        api_db_path=str(tmp_path / "chat.sqlite3"),
+    )
+
+    async def scenario():
+        started = asyncio.Event()
+        monkeypatch.setattr(runner, "build_agent_runtime", lambda _config: CancellableRuntime(started))
+        monkeypatch.setattr(runner, "build_llm_client", lambda _config: None)
+        task = asyncio.create_task(
+            runner.run_conversation_query(
+                store=store,
+                config=config,
+                sessions=SessionRegistry(),
+                conversation_id="conversation_1",
+                query="开始后取消",
+            )
+        )
+        await started.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(scenario())
+
+    assistant = [message for message in store.list_messages("conversation_1") if message["role"] == "assistant"][-1]
+    assert assistant["payload"]["status"] == "cancelled"
+    assert assistant["payload"]["steps"][0]["status"] == "cancelled"
+    assert assistant["payload"]["steps"][0]["ended_at"]
+    assert assistant["payload"]["metrics"]["duration_ms"] >= 0
