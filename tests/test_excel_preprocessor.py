@@ -390,6 +390,103 @@ def test_context_group_still_detects_first_floor_pattern():
     assert label == "First Floor"
 
 
+def test_process_forward_fills_repeating_key_value_context_rows(tmp_path):
+    workbook_path = tmp_path / "repeating_entity_context.xlsx"
+    workbook = openpyxl.Workbook()
+    ws = workbook.active
+    ws.title = "Sheet1"
+    ws.append(["Label", "Value", "Group Label", "Group", "Metric", "Amount"])
+    ws.append(["User Name:", "Alice 1001", "Department:", "Support", None, None])
+    ws.append(["Queue A", None, None, None, "Chats Serviced", 12])
+    ws.append(["Total", None, None, None, "Chats Serviced", 12])
+    ws.append(["User Name:", "Bob 1002", "Department:", "Sales", None, None])
+    ws.append(["Queue B", None, None, None, "Chats Serviced", 8])
+    ws.append(["Total", None, None, None, "Chats Serviced", 8])
+    workbook.save(workbook_path)
+
+    manifest = {
+        "manifest_path": "workbook_manifest.json",
+        "files": [
+            {
+                "path": str(workbook_path),
+                "sheets": [
+                    {
+                        "name": "Sheet1",
+                        "tables": [
+                            {
+                                "table_id": "Sheet1_t1",
+                                "range": "A1:F7",
+                                "header_candidates": [1],
+                            }
+                        ],
+                    }
+                ],
+            }
+        ],
+    }
+
+    result = ExcelPreprocessor().process(workbook_path, manifest)
+    table = result.tables[0]
+    path = Path(table.parquet_path)
+    dataframe = pd.read_parquet(path) if path.suffix == ".parquet" else pd.read_excel(path)
+
+    assert table.row_count == 4
+    assert dataframe["_context_user_name"].tolist() == [
+        "Alice 1001",
+        "Alice 1001",
+        "Bob 1002",
+        "Bob 1002",
+    ]
+    assert dataframe["_context_department"].tolist() == [
+        "Support",
+        "Support",
+        "Sales",
+        "Sales",
+    ]
+    assert any("重复键值分组行" in warning for warning in table.warnings)
+
+
+def test_repeating_colon_values_with_numeric_data_remain_flat_rows(tmp_path):
+    workbook_path = tmp_path / "flat_colon_values.xlsx"
+    workbook = openpyxl.Workbook()
+    ws = workbook.active
+    ws.title = "Sheet1"
+    ws.append(["Event", "Value", "Notes"])
+    ws.append(["Status:", 10, "ok"])
+    ws.append(["Status:", 20, "ok"])
+    workbook.save(workbook_path)
+
+    manifest = {
+        "manifest_path": "workbook_manifest.json",
+        "files": [
+            {
+                "path": str(workbook_path),
+                "sheets": [
+                    {
+                        "name": "Sheet1",
+                        "tables": [
+                            {
+                                "table_id": "Sheet1_t1",
+                                "range": "A1:C3",
+                                "header_candidates": [1],
+                            }
+                        ],
+                    }
+                ],
+            }
+        ],
+    }
+
+    result = ExcelPreprocessor().process(workbook_path, manifest)
+    table = result.tables[0]
+    path = Path(table.parquet_path)
+    dataframe = pd.read_parquet(path) if path.suffix == ".parquet" else pd.read_excel(path)
+
+    assert table.row_count == 2
+    assert dataframe["Event"].tolist() == ["Status:", "Status:"]
+    assert not any(column.startswith("_context_") for column in dataframe.columns)
+
+
 def test_merge_multi_level_headers_returns_lineage():
     preprocessor = ExcelPreprocessor()
     rows = [
