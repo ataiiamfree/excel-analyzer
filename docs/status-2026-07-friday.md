@@ -34,6 +34,18 @@
   - prompt budget test
   - 单会话多 WS 保护（P2-8）
 
+### Smoke 定义（固定，闸门条件 2 的执行口径）
+
+- **答案回归**：`python scripts/run_eval.py --manifest docs/test_datasets/simple_accuracy_manifest.json --case-id simple-01-q01 --case-id simple-07-q03 --case-id simple-12-q01 --output-dir eval_runs/<run-name> --max-semantic-repair-attempts 1 --retries 2 --log-level INFO`
+- **删除生命周期**：`python scripts/smoke_delete_lifecycle.py`（真实 API + 真实 LLM：空闲 WS 可删 / 运行中 409 / 取消或完成后可删）
+- 不再需要人工挑表。
+
+### Smoke 结果 · 2026-07-16（P1-6 修正后）
+
+- 删除生命周期：**全部通过**（S1/S2/S3，20 项检查）
+- 答案回归：simple-01-q01 **PASS**、simple-12-q01 **PASS**、simple-07-q03 **FAIL ×2**（复跑一次仍失败）
+- simple-07-q03 定性：**非回归**。两次运行主结论均正确（取消率 32%、8 单、并列最多 3 客户全列出）；失败均为结果表格式断言——首跑缺汇总行，复跑有汇总行但指标名为英文（断言要求行内含"取消"）且明细表多含 0 取消客户行。该 case 无历史通过基线（v0.9 普通表回归跑的是 simple-07-q01），且本分支 diff 仅涉及 `app/api/*` + 测试 + 文档，不触碰分析管线。归入下方已知限制。
+
 ### Codex 线 · 1135 诊断（不实现）
 
 - **分支**：暂不开
@@ -49,6 +61,7 @@
 | 1135 | targeted 通过 `2, 24`，full-run 变成 `2, 48` | Codex 线诊断中 |
 | 104, 101, 126, 2292, 515 | v0.9.0 release note 已列 | Backlog（可能 v0.10+ 或更远） |
 | 普通表 5 例的第 5 例 | 主结论正确、缺派生字段 | Backlog（输出完整性问题非主结论错误） |
+| simple-07-q03 | 主结论正确（取消率/并列最多客户均对），结果表缺中文标签汇总行或含多余明细行，断言不过 | Backlog（同上：输出完整性/格式约定类；无历史通过基线，非 v0.9.2 回归） |
 
 ## 周五唯一发布闸门
 
@@ -76,4 +89,5 @@
 | 2026-07-16 | CC 线 P1-5 + P1-6 + CORS 告警完成（`5074d09`，284 passed），PR #6 已开，待合并；Codex 线 1135 诊断未开工 |
 | 2026-07-16 | Codex 复核 PR #6：P1-5 正确；P1-6 误把"任意 WS 连接"当"分析运行中"，空闲会话页无法删除 → 改判**待修正**，PR #6 暂缓合并 |
 | 2026-07-16 | P1-6 修正：`ConnectionManager` 区分 connected 与 active_run，新增 3 项删除生命周期回归（空闲可删 / 运行中 409 / 取消或完成后可删），291 passed |
+| 2026-07-16 | Smoke 完成：删除生命周期全过；答案回归 2/3（simple-07-q03 定性为已知限制类、非回归，详见上文）；PR #6 合并 |
 | 2026-07-17（预期） | v0.9.2-mvp 单一发布（若闸门条件全满足） |
