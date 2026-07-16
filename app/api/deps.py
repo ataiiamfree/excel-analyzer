@@ -9,6 +9,7 @@ from typing import Any
 from app.config import Config
 from app.session import Session
 from app.api.persistence.store import Store
+from app.api.ws.manager import ConnectionManager
 
 
 @lru_cache(maxsize=1)
@@ -41,6 +42,14 @@ class SessionRegistry:
         session = Session(session_id=conversation_id, file_path=file_path)
         self._sessions[conversation_id] = session
         return session
+
+    def delete(self, conversation_id: str) -> None:
+        """Release the cached Session for a deleted conversation.
+
+        Without this, long-running processes accumulate one Session per
+        create/delete pair for the process lifetime.
+        """
+        self._sessions.pop(conversation_id, None)
 
 
 class RunRegistry:
@@ -81,3 +90,8 @@ def get_session_registry() -> SessionRegistry:
 @lru_cache(maxsize=1)
 def get_run_registry() -> RunRegistry:
     return RunRegistry()
+
+
+@lru_cache(maxsize=1)
+def get_connection_manager() -> ConnectionManager:
+    return ConnectionManager()
