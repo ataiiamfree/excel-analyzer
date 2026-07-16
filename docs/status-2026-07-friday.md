@@ -25,8 +25,8 @@
 
 - **分支**：`codex/v0.9.2-conversation-lifecycle`
 - **In scope**：
-  - P1-5 `SessionRegistry.delete` + `delete_conversation` 清理
-  - P1-6 `delete_conversation` 检查活跃 WS → 409
+  - P1-5 `SessionRegistry.delete` + `delete_conversation` 清理 ✅
+  - P1-6 `delete_conversation` 检查活跃 WS → 409 ⚠️ **待修正**：Codex 复核发现 `has_active` 把"任意 WS 连接"误判为"分析正在运行"，空闲会话页也无法删除；需区分 connected 与 active_run
 - **Optional（快速无风险时做）**：CORS `cors_origins` 空时启动日志明确告警
 - **明确不做**（推 Backlog）：
   - access log middleware
@@ -74,4 +74,5 @@
 | 2026-07-15 | v0.9.1-mvp 发布（`375d4ef`），P0/P1 hotfix |
 | 2026-07-16（进行中） | v0.9.2 hardening 双线：CC 做 API 正确性，Codex 做 1135 诊断 |
 | 2026-07-16 | CC 线 P1-5 + P1-6 + CORS 告警完成（`5074d09`，284 passed），PR #6 已开，待合并；Codex 线 1135 诊断未开工 |
+| 2026-07-16 | Codex 复核 PR #6：P1-5 正确；P1-6 误把"任意 WS 连接"当"分析运行中"，空闲会话页无法删除 → 改判**待修正**，PR #6 暂缓合并 |
 | 2026-07-17（预期） | v0.9.2-mvp 单一发布（若闸门条件全满足） |
