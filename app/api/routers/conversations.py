@@ -10,7 +10,14 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 
-from app.api.deps import SessionRegistry, get_config, get_session_registry, get_store
+from app.api.deps import (
+    SessionRegistry,
+    get_config,
+    get_connection_manager,
+    get_session_registry,
+    get_store,
+)
+from app.api.ws.manager import ConnectionManager
 from app.api.persistence.store import Store, utc_now_iso
 from app.api.schemas import (
     ArtifactOut,
@@ -139,13 +146,26 @@ async def delete_conversation(
     conversation_id: str,
     store: Store = Depends(get_store),
     config: Config = Depends(get_config),
+    sessions: SessionRegistry = Depends(get_session_registry),
+    manager: ConnectionManager = Depends(get_connection_manager),
 ) -> None:
     try:
         store.get_conversation(conversation_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="会话不存在") from exc
+    # Refuse to delete while any client is still connected. Otherwise the
+    # sandbox script in the middle of writing to `workspace/<id>/output/*`
+    # dies with FileNotFoundError and the user sees an opaque error in the
+    # other tab.
+    if manager.has_active(conversation_id):
+        raise HTTPException(
+            status_code=409,
+            detail="会话仍有活跃连接，请先取消或关闭该分析再删除",
+        )
     store.delete_conversation(conversation_id)
     shutil.rmtree(Path(config.workspace_dir) / conversation_id, ignore_errors=True)
+    # Release the in-memory Session so long-running processes don't leak.
+    sessions.delete(conversation_id)
 
 
 @router.get("/{conversation_id}/messages", response_model=list[MessageOut])

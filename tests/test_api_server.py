@@ -2,6 +2,7 @@ import asyncio
 from datetime import datetime, timezone
 from io import BytesIO
 
+import pytest
 from fastapi import UploadFile
 from fastapi.testclient import TestClient
 
@@ -163,6 +164,112 @@ def test_spa_fallback_rejects_encoded_traversal(tmp_path, monkeypatch):
             )
     finally:
         reload(server)
+
+
+class _FakeWsManager:
+    """Minimal ConnectionManager stand-in for router unit tests."""
+
+    def __init__(self, active: bool = False) -> None:
+        self._active = active
+        self.checked = False
+
+    def has_active(self, conversation_id: str) -> bool:
+        self.checked = True
+        assert conversation_id == "conversation-1"
+        return self._active
+
+
+class _FakeDeleteStore:
+    def __init__(self) -> None:
+        self.deleted = False
+
+    def get_conversation(self, conversation_id):
+        assert conversation_id == "conversation-1"
+        return {"id": conversation_id}
+
+    def delete_conversation(self, conversation_id):
+        assert conversation_id == "conversation-1"
+        self.deleted = True
+
+
+class _FakeSessionRegistry:
+    def __init__(self) -> None:
+        self.deleted_ids: list[str] = []
+
+    def delete(self, conversation_id: str) -> None:
+        self.deleted_ids.append(conversation_id)
+
+
+def test_delete_conversation_removes_workspace_and_session(tmp_path, monkeypatch):
+    """Happy path: no active WS → conversation, workspace and session all cleared."""
+    workspace_root = tmp_path / "workspaces"
+    (workspace_root / "conversation-1" / "raw").mkdir(parents=True)
+    (workspace_root / "conversation-1" / "raw" / "book.xlsx").write_text("x")
+
+    class _Cfg:
+        workspace_dir = str(workspace_root)
+
+    store = _FakeDeleteStore()
+    sessions = _FakeSessionRegistry()
+    manager = _FakeWsManager(active=False)
+
+    asyncio.run(
+        conversations.delete_conversation(
+            "conversation-1",
+            store=store,
+            config=_Cfg(),
+            sessions=sessions,
+            manager=manager,
+        )
+    )
+
+    assert manager.checked, "has_active must be consulted before delete"
+    assert store.deleted, "store.delete_conversation must be called"
+    assert sessions.deleted_ids == ["conversation-1"], (
+        "SessionRegistry.delete must be called so long-running processes don't leak"
+    )
+    assert not (workspace_root / "conversation-1").exists(), (
+        "workspace directory must be removed"
+    )
+
+
+def test_delete_conversation_rejects_when_ws_still_connected(tmp_path):
+    """P1-6: refuse to delete while any client is still connected.
+
+    Regression guard: previously the router blindly rmtree'd the workspace,
+    which killed the running sandbox script in the other tab with an opaque
+    FileNotFoundError.
+    """
+    from fastapi import HTTPException
+
+    workspace_root = tmp_path / "workspaces"
+    (workspace_root / "conversation-1").mkdir(parents=True)
+
+    class _Cfg:
+        workspace_dir = str(workspace_root)
+
+    store = _FakeDeleteStore()
+    sessions = _FakeSessionRegistry()
+    manager = _FakeWsManager(active=True)
+
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(
+            conversations.delete_conversation(
+                "conversation-1",
+                store=store,
+                config=_Cfg(),
+                sessions=sessions,
+                manager=manager,
+            )
+        )
+
+    assert exc.value.status_code == 409
+    assert "活跃连接" in exc.value.detail
+    assert not store.deleted, "store must not be touched while WS is active"
+    assert sessions.deleted_ids == [], "session must not be released while WS is active"
+    assert (workspace_root / "conversation-1").exists(), (
+        "workspace must survive a rejected delete"
+    )
 
 
 def test_spa_fallback_rejects_absolute_paths(tmp_path, monkeypatch):

@@ -23,3 +23,7 @@ class ConnectionManager:
     async def send_json(self, conversation_id: str, payload: dict) -> None:
         for websocket in list(self._connections.get(conversation_id, set())):
             await websocket.send_json(payload)
+
+    def has_active(self, conversation_id: str) -> bool:
+        """True while any client WS is still connected for the conversation."""
+        return bool(self._connections.get(conversation_id))

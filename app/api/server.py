@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from contextlib import suppress
 from pathlib import Path
 
@@ -11,18 +12,36 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.api.deps import get_config, get_session_registry, get_store
+from app.api.deps import (
+    get_config,
+    get_connection_manager,
+    get_session_registry,
+    get_store,
+)
 from app.api.routers import artifacts, conversations, runs
-from app.api.ws.manager import ConnectionManager
 from app.api.ws.runner import run_conversation_query
 from app.api.ws_events import ClientErrorEvent, ClientEvent
 from pydantic import ValidationError
 
+logger = logging.getLogger(__name__)
+
 config = get_config()
 app = FastAPI(title="ChatExcel API", version="0.9.0")
-manager = ConnectionManager()
+# Reuse the singleton the routers see so delete_conversation can consult the
+# same active-connection map as the WS handler here.
+manager = get_connection_manager()
 
 origins = [item.strip() for item in config.cors_origins.split(",") if item.strip()]
+if not origins:
+    # `CORSMiddleware` treats `["*"]` as "any origin"; combined with
+    # `allow_credentials=True` browsers actually refuse to send credentials,
+    # but the server still advertises the loose policy. Log loudly so
+    # deployers know they left CORS unconfigured instead of silently
+    # falling back to `*`.
+    logger.warning(
+        "CORS_ORIGINS is empty; falling back to '*'. Set it in .env before "
+        "exposing the API beyond localhost."
+    )
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins or ["*"],
