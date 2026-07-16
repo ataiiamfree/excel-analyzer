@@ -153,14 +153,15 @@ async def delete_conversation(
         store.get_conversation(conversation_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="会话不存在") from exc
-    # Refuse to delete while any client is still connected. Otherwise the
-    # sandbox script in the middle of writing to `workspace/<id>/output/*`
-    # dies with FileNotFoundError and the user sees an opaque error in the
-    # other tab.
-    if manager.has_active(conversation_id):
+    # Refuse to delete only while an analysis is actually executing —
+    # rmtree'ing mid-run kills the sandbox script writing to
+    # `workspace/<id>/output/*` with an opaque FileNotFoundError in the
+    # other tab. A merely-open idle page (WS connected, no run) must not
+    # block deletion.
+    if manager.has_active_run(conversation_id):
         raise HTTPException(
             status_code=409,
-            detail="会话仍有活跃连接，请先取消或关闭该分析再删除",
+            detail="该会话有正在运行的分析，请先取消或等待完成再删除",
         )
     store.delete_conversation(conversation_id)
     shutil.rmtree(Path(config.workspace_dir) / conversation_id, ignore_errors=True)

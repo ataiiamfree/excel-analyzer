@@ -79,6 +79,10 @@ async def conversation_ws(websocket: WebSocket, conversation_id: str) -> None:
         await send(event.model_dump(mode="json"))
 
     async def execute_query(event: ClientEvent) -> None:
+        # Mark the run for the whole task lifetime (including cancellation)
+        # so delete_conversation can tell "analysis executing" apart from
+        # "page merely open with an idle WS".
+        manager.begin_run(conversation_id)
         try:
             await run_conversation_query(
                 store=store,
@@ -95,6 +99,8 @@ async def conversation_ws(websocket: WebSocket, conversation_id: str) -> None:
             # The runner emits and persists a structured failure before an
             # unexpected transport error reaches this boundary.
             pass
+        finally:
+            manager.end_run(conversation_id)
 
     try:
         while True:
