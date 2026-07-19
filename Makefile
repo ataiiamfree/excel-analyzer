@@ -1,4 +1,4 @@
-.PHONY: install run web-install web-dev web-build dev test clean lint
+.PHONY: install run run-dev web-install web-dev web-build dev test clean lint
 
 HOST ?= 127.0.0.1
 PORT ?= 8000
@@ -7,7 +7,13 @@ install:
 	pip install -r requirements.txt
 
 run:
-	uvicorn app.api.server:app --host $(HOST) --port $(PORT) --reload
+	uvicorn app.api.server:app --host $(HOST) --port $(PORT)
+
+# Restrict reload watching to source code. Watching the whole repository also
+# sees workspace/<session>/scripts/*.py generated during normal analysis and
+# would restart the server in the middle of an active WebSocket run.
+run-dev:
+	uvicorn app.api.server:app --host $(HOST) --port $(PORT) --reload --reload-dir app
 
 web-install:
 	cd web && npm install
@@ -20,7 +26,7 @@ web-build:
 
 dev:
 	@echo "Run backend and frontend in two terminals:"
-	@echo "  make run"
+	@echo "  make run-dev"
 	@echo "  make web-dev"
 
 test:

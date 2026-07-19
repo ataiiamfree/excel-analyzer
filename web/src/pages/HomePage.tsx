@@ -18,7 +18,9 @@ export default function HomePage() {
   const create = useMutation({
     mutationFn: () => {
       if (!file) throw new Error("请选择 Excel 文件");
-      return createConversation(file, query);
+      const initialQuery = query.trim();
+      if (!initialQuery) throw new Error("请输入分析问题");
+      return createConversation(file, initialQuery);
     },
     onSuccess: (conversation) => {
       const initialQuery = query.trim();
@@ -47,7 +49,7 @@ export default function HomePage() {
   };
 
   const submitForm = () => {
-    if (!file || create.isPending) return;
+    if (!file || !query.trim() || create.isPending) return;
     create.mutate();
   };
 
@@ -111,7 +113,7 @@ export default function HomePage() {
             <span className="mono" style={{ color: "var(--ink-4)", fontSize: 11 }}>
               {file ? `${Math.ceil(file.size / 1024)} KB` : "支持单个文件 100MB 以内"}
             </span>
-            <button className="primary-btn" disabled={!file || create.isPending}>
+            <button className="primary-btn" disabled={!file || !query.trim() || create.isPending}>
               {create.isPending ? "创建中..." : "开始分析"}
               <SendHorizontal size={14} />
             </button>

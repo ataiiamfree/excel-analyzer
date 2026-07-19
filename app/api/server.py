@@ -26,7 +26,7 @@ from pydantic import ValidationError
 logger = logging.getLogger(__name__)
 
 config = get_config()
-app = FastAPI(title="ChatExcel API", version="0.9.0")
+app = FastAPI(title="ChatExcel API", version="0.9.2")
 # Reuse the singleton the routers see so delete_conversation can consult the
 # same active-connection map as the WS handler here.
 manager = get_connection_manager()

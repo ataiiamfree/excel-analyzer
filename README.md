@@ -2,7 +2,7 @@
 
 上传 Excel 文件，用自然语言提出分析需求，自动生成 Python 代码执行分析并输出报告。当前交互层已重构为 **FastAPI + WebSocket 后端** 与 **React/TypeScript 前端**。
 
-当前交付版本为 **v0.9.0 MVP**。交付范围、测试证据和已知限制见 [v0.9 MVP 交付说明](docs/V0.9-MVP-Release.md)。
+当前交付候选版本为 **v0.9.2 MVP（v0.9 Max）**。交付范围、测试证据和已知限制见 [v0.9 MVP 交付说明](docs/V0.9-MVP-Release.md)，真实浏览器验收结果见 [v0.9 Max QA 报告](docs/v0.9-max-qa-report.md)。
 
 ## 架构
 
@@ -85,6 +85,7 @@ make web-dev
 - 停止：分别回到两个终端按 `Ctrl+C`。
 - 重启：再次在终端 A 运行 `make run`，在终端 B 运行 `make web-dev`。
 - 端口占用：先停止旧进程；也可用 `PORT=8001 make run` 临时更换后端端口，并用 `VITE_API_TARGET=http://127.0.0.1:8001 make web-dev` 启动前端。
+- 后端热重载开发：使用 `make run-dev`；它只监控 `app/`，不会被分析过程生成的 `workspace/*/scripts/*.py` 误触发重启。
 
 构建前端后，也可以只启动后端，由 FastAPI 同时提供静态前端：
 

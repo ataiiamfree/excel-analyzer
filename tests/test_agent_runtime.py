@@ -1,5 +1,6 @@
 import asyncio
 import json
+import os
 from types import SimpleNamespace
 
 import pytest
@@ -143,6 +144,8 @@ def test_pi_sidecar_maps_events_to_callbacks(tmp_path):
     assert "python -m app.agent.pi_tool_service" in adapter.transport.payload["prompt"]
     assert "spreadsheet.ingest_workbook" in adapter.transport.payload["prompt"]
     assert "<<FINAL_REPORT>>" in adapter.transport.payload["prompt"]
+    assert "禁止执行 git" in adapter.transport.payload["prompt"]
+    assert "不是编码任务" in adapter.transport.payload["prompt"]
 
 
 def test_pi_sidecar_keeps_prefinal_text_out_of_report(tmp_path):
@@ -264,3 +267,17 @@ def test_pi_rpc_transport_uses_configured_stream_limit(tmp_path):
     transport = build_pi_rpc_transport(config)
 
     assert transport.stream_limit_bytes == 2 * 1024 * 1024
+
+
+def test_pi_rpc_transport_forces_analysis_only_runtime_guards(tmp_path):
+    config = Config(
+        workspace_dir=str(tmp_path),
+        pi_args="--mode rpc --no-session",
+    )
+
+    transport = build_pi_rpc_transport(config)
+
+    assert "--no-context-files" in transport.command
+    tools_index = transport.command.index("--tools")
+    assert transport.command[tools_index + 1] == "bash"
+    assert transport.env["GIT_DIR"] == os.devnull

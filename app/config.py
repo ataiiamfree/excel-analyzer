@@ -46,7 +46,12 @@ class Config:
     max_concurrent_tasks: int = field(default_factory=lambda: int(os.getenv("MAX_CONCURRENT_TASKS", "1")))
 
     pi_command: str = field(default_factory=lambda: os.getenv("PI_COMMAND", "pi"))
-    pi_args: str = field(default_factory=lambda: os.getenv("PI_ARGS", "--mode rpc --no-session"))
+    pi_args: str = field(
+        default_factory=lambda: os.getenv(
+            "PI_ARGS",
+            "--mode rpc --no-session --no-context-files --tools bash",
+        )
+    )
     pi_cwd: str = field(default_factory=lambda: os.getenv("PI_CWD", "."))
     pi_provider: str = field(default_factory=lambda: os.getenv("PI_PROVIDER", ""))
     pi_model: str = field(default_factory=lambda: os.getenv("PI_MODEL", ""))

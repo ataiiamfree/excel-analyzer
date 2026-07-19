@@ -371,7 +371,10 @@ class PiSidecarRuntimeAdapter(AgentRuntimeAdapter):
             "1. 不直接读取或改写原始办公文件；必须通过下面的 Python typed tool service 调用后端工具。\n"
             "2. 用户可见产物必须写入当前 workspace 的 output/，并由工具服务登记 Artifact Graph。\n"
             "3. 不要泄露 API key、环境变量或 workspace 外路径。\n"
-            "4. 如果用户询问已生成产物，优先调用 artifact.explain 或 artifact.inspect，不重新分析原始文件。\n\n"
+            "4. 如果用户询问已生成产物，优先调用 artifact.explain 或 artifact.inspect，不重新分析原始文件。\n"
+            "5. 这是数据分析运行时，不是编码任务。禁止执行 git、修改仓库源码/文档/配置、安装依赖或创建提交。\n"
+            "6. bash 只允许用于调用下方 typed tool service；禁止 ls/cat/find/read 等绕过工具服务的直接文件访问。\n"
+            "7. 完成结果校验后立即输出最终报告；不要执行提交、清理、部署或其他收尾动作。\n\n"
             "输出约束：\n"
             f"- 只有准备给用户最终报告时，才输出 `{PiEventMapper.final_marker}`，后面紧跟最终报告正文。\n"
             "- marker 之前不要输出任何给用户看的执行过程。\n"
@@ -407,6 +410,15 @@ def build_agent_runtime(
 def build_pi_rpc_transport(config: Any) -> PiRpcTransport:
     command = [str(getattr(config, "pi_command", "pi"))]
     extra_args = shlex.split(str(getattr(config, "pi_args", "--mode rpc --no-session")))
+    # Pi is embedded here as a data-analysis sidecar, not as a repository
+    # coding agent.  Project context files (for example CLAUDE.md rules that
+    # instruct coding agents to commit every change) must never leak into an
+    # end-user analysis run.  Keep only bash enabled because it is the narrow
+    # bridge used to invoke ``app.agent.pi_tool_service``.
+    if "--no-context-files" not in extra_args and "-nc" not in extra_args:
+        extra_args.append("--no-context-files")
+    if "--tools" not in extra_args and "-t" not in extra_args:
+        extra_args.extend(["--tools", "bash"])
     command.extend(extra_args)
     provider = str(getattr(config, "pi_provider", "") or "")
     model = str(getattr(config, "pi_model", "") or "")
@@ -415,6 +427,10 @@ def build_pi_rpc_transport(config: Any) -> PiRpcTransport:
     if model:
         command.extend(["--model", model])
     env = os.environ.copy()
+    # Defense in depth: even if a model ignores the prompt and invokes git
+    # through bash, the isolated Pi process must not discover or mutate the
+    # application's repository.  This does not affect the parent process.
+    env["GIT_DIR"] = os.devnull
     return PiRpcTransport(
         command=command,
         cwd=str(getattr(config, "pi_cwd", "") or os.getcwd()),

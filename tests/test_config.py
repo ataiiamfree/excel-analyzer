@@ -27,7 +27,7 @@ def test_deepseek_defaults_are_aligned():
     assert config.budget_preset == "deepseek"
     assert config.max_semantic_repair_attempts == 1
     assert config.pi_command == "pi"
-    assert config.pi_args == "--mode rpc --no-session"
+    assert config.pi_args == "--mode rpc --no-session --no-context-files --tools bash"
     assert config.pi_stream_limit_bytes == 16 * 1024 * 1024
 
 

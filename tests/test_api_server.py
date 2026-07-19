@@ -19,6 +19,10 @@ def _event(event_type: str) -> dict:
     }
 
 
+def test_api_version_matches_v0_9_2_release():
+    assert server.app.version == "0.9.2"
+
+
 def test_websocket_cancel_stops_active_run_without_closing_connection(monkeypatch):
     async def fake_run_conversation_query(*, sender, **kwargs):
         await sender({**_event("run.start"), "message_id": "assistant-1"})
