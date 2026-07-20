@@ -1,11 +1,11 @@
 interface ReasoningCapsuleProps {
   reasoning?: { text: string; tokens: number } | null;
-  open?: boolean;
+  active?: boolean;
 }
 
 const MAX_VISIBLE_REASONING_CHARS = 12_000;
 
-export default function ReasoningCapsule({ reasoning, open }: ReasoningCapsuleProps) {
+export default function ReasoningCapsule({ reasoning, active }: ReasoningCapsuleProps) {
   if (!reasoning?.text) {
     return null;
   }
@@ -14,18 +14,18 @@ export default function ReasoningCapsule({ reasoning, open }: ReasoningCapsulePr
     ? reasoning.text.slice(-MAX_VISIBLE_REASONING_CHARS)
     : reasoning.text;
   return (
-    <details className="reasoning" open={open}>
+    <details className="reasoning">
       <summary>
         <span className="dot" />
-        <span className="label">思考过程</span>
-        <span className="meta">{reasoning.tokens.toLocaleString("zh-CN")} tokens</span>
+        <span className="label">分析过程</span>
+        <span className="meta">{active ? "正在更新" : "按需查看"}</span>
         <span className="chev">›</span>
       </summary>
       <div className="stream">
         {truncated ? <div className="reasoning-truncated">内容较长，仅显示最近片段</div> : null}
         <p>
           {visibleText}
-          {open ? <span className="caret" /> : null}
+          {active ? <span className="caret" /> : null}
         </p>
       </div>
     </details>

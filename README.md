@@ -2,7 +2,7 @@
 
 上传 Excel 文件，用自然语言提出分析需求，自动生成 Python 代码执行分析并输出报告。当前交互层已重构为 **FastAPI + WebSocket 后端** 与 **React/TypeScript 前端**。
 
-当前交付候选版本为 **v0.9.2 MVP（v0.9 Max）**。交付范围、测试证据和已知限制见 [v0.9 MVP 交付说明](docs/V0.9-MVP-Release.md)，真实浏览器验收结果见 [v0.9 Max QA 报告](docs/v0.9-max-qa-report.md)。
+当前交付候选版本为 **v0.9.2 MVP（v0.9 Max）**。交付范围、测试证据和已知限制见 [v0.9 MVP 交付说明](docs/V0.9-MVP-Release.md)，真实浏览器验收结果见 [v0.9 Max QA 报告](docs/v0.9-max-qa-report.md)。固定演示问题、录屏脚本、PPT 大纲和真实截图见 [演示 Runbook](docs/demo/v0.9-demo-runbook.md)。
 
 ## 架构
 

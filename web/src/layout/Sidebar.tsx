@@ -94,9 +94,10 @@ export default function Sidebar({ activeId, groups, mobileOpen, onNavigate }: Si
       </div>
 
       <div className="user-card">
-        <div className="avatar">NX</div>
+        <div className="avatar">CX</div>
         <div className="user-meta">
-          <span className="name">Natalia X.</span>
+          <span className="name">本地工作区</span>
+          <span className="plan">v0.9 Max</span>
         </div>
       </div>
     </aside>

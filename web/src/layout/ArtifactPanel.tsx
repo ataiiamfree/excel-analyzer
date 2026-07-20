@@ -60,7 +60,7 @@ export default function ArtifactPanel({ artifacts }: ArtifactPanelProps) {
         </button>
         {codeArtifacts.length > 0 ? (
           <button className={`tab ${tab === "code" ? "active" : ""}`} onClick={() => setTab("code")}>
-            代码 <span className="count">{codeArtifacts.length}</span>
+            技术详情 <span className="count">{codeArtifacts.length}</span>
           </button>
         ) : null}
       </div>

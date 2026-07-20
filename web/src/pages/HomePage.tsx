@@ -7,6 +7,12 @@ import { createConversation, fetchConversations, validateExcelFile } from "../ap
 import Sidebar from "../layout/Sidebar";
 import { useUiStore } from "../store/uiStore";
 
+const EXAMPLE_QUERIES = [
+  "汇总各部门费用，并找出超预算项目",
+  "按月分析销售趋势，并标记异常月份",
+  "找出库存不足的商品，并导出补货清单"
+];
+
 export default function HomePage() {
   const navigate = useNavigate();
   const [file, setFile] = useState<File | null>(null);
@@ -90,12 +96,17 @@ export default function HomePage() {
           Chat<em>Excel</em>
         </h1>
         <p className="home-copy">
-          上传 Excel 后直接描述分析目标，系统会生成计划、执行 Python 分析、输出报告和可下载产物。
+          上传 Excel，用一句话得到分析结论、图表和可下载表格。
         </p>
+        <div className="home-capabilities" aria-label="产品能力">
+          <span>自动理解表格</span>
+          <span>可追问分析</span>
+          <span>结果可下载</span>
+        </div>
         <form className="upload-panel" onSubmit={submit}>
-          <label className="upload-drop">
+          <label className={`upload-drop ${file ? "file-ready" : ""}`}>
             <UploadCloud size={24} />
-            <span>{file ? file.name : "选择 .xlsx / .xlsm 文件"}</span>
+            <span>{file ? `已就绪 · ${file.name}` : "选择 .xlsx / .xlsm 文件"}</span>
             <input
               type="file"
               accept=".xlsx,.xlsm"
@@ -109,6 +120,16 @@ export default function HomePage() {
             onKeyDown={onQueryKeyDown}
             placeholder="例如：按区域汇总 Q3 销售额，找出 TOP5 和 BTM5 城市，输出图表与明细表。"
           />
+          <div className="example-queries" aria-label="示例问题">
+            <span className="example-label">试试这样问</span>
+            <div className="example-list">
+              {EXAMPLE_QUERIES.map((example) => (
+                <button type="button" key={example} onClick={() => setQuery(example)}>
+                  {example}
+                </button>
+              ))}
+            </div>
+          </div>
           <div className="upload-actions">
             <span className="mono" style={{ color: "var(--ink-4)", fontSize: 11 }}>
               {file ? `${Math.ceil(file.size / 1024)} KB` : "支持单个文件 100MB 以内"}

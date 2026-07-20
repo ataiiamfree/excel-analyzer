@@ -143,7 +143,7 @@ export default function MessageAssistant({
         <span className="ts">{timeLabel(payload, createdAt, live)}</span>
       </div>
 
-      <ReasoningCapsule reasoning={payload.reasoning} open={payload.status === "running"} />
+      <ReasoningCapsule reasoning={payload.reasoning} active={payload.status === "running"} />
       <PlanBlock payload={payload} />
       {payload.status === "running" ? <ProgressLine payload={payload} /> : null}
       {payload.report ? <ReportArticle markdown={payload.report} /> : null}

@@ -18,6 +18,17 @@ interface TablePreviewProps {
   active?: boolean;
 }
 
+export function formatCellValue(value: unknown): string {
+  if (value === null || value === undefined) return "";
+  if (typeof value !== "number" || !Number.isFinite(value)) return String(value);
+
+  const normalized = Number.parseFloat(value.toPrecision(12));
+  return normalized.toLocaleString("zh-CN", {
+    maximumSignificantDigits: 12,
+    useGrouping: true
+  });
+}
+
 export default function TablePreview({ artifact, active }: TablePreviewProps) {
   const [globalFilter, setGlobalFilter] = useState("");
   const [sorting, setSorting] = useState<SortingState>([]);
@@ -33,7 +44,14 @@ export default function TablePreview({ artifact, active }: TablePreviewProps) {
       (data?.columns ?? []).map((column) => ({
         accessorKey: column,
         header: column,
-        cell: (info) => String(info.getValue() ?? "")
+        cell: (info) => {
+          const value = info.getValue();
+          return (
+            <span className={typeof value === "number" ? "table-number" : undefined}>
+              {formatCellValue(value)}
+            </span>
+          );
+        }
       })),
     [data?.columns]
   );

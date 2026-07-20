@@ -6,10 +6,11 @@ interface ArtifactChipsProps {
 }
 
 function iconLabel(kind: string) {
-  if (kind === "chart") return "IMG";
+  if (kind === "chart") return "图表";
   if (kind === "csv") return "CSV";
-  if (kind === "report") return "MD";
-  return "XL";
+  if (kind === "report") return "报告";
+  if (["data", "normalized_table"].includes(kind)) return "表格";
+  return "Excel";
 }
 
 export default function ArtifactChips({ artifacts }: ArtifactChipsProps) {

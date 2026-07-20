@@ -1,4 +1,5 @@
 import type { AssistantMessagePayload, PlanStep, StepRecord } from "../api/types";
+import { toolLabel } from "./presentationLabels";
 import StepItem from "./StepItem";
 
 interface PlanBlockProps {
@@ -20,7 +21,7 @@ export default function PlanBlock({ payload }: PlanBlockProps) {
       <h4>
         <span>执行计划</span>
         <span className="scope">
-          {steps.length} 步 · {tools === 1 ? steps[0].tool : "mixed"}
+          {steps.length} 个步骤 · {tools === 1 ? toolLabel(steps[0].tool) : "多工具协同"}
         </span>
       </h4>
       {steps.map((step, index) => (
