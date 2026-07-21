@@ -17,7 +17,7 @@
 - 为 Pi sidecar 增加操作系统级 workspace 写入隔离；当前 v0.9 已隔离 context、限制工具并阻断 Git。
 - 为 typed tool service 提供原生 Pi custom tool，替换通用 bash bridge。
 - workspace TTL/GC、磁盘空间预警、跨进程任务恢复。
-- follow-up 运行会对同路径产物重复登记 SQLite artifact 记录；UI 已按路径去重，后续在持久化层改为幂等登记。
+- ~~follow-up 运行会对同路径产物重复登记 SQLite artifact 记录~~（已在持久化层改为按 `(conversation_id, path)` 幂等登记；UI 去重保留作为对历史重复数据的兜底）。
 
 ## 生产化
 
