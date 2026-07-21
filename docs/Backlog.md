@@ -22,6 +22,6 @@
 ## 生产化
 
 - 鉴权、多租户、数据留存和审计。
-- Docker/Kubernetes、CI/CD、监控告警和结构化日志。
+- Docker/Kubernetes、监控告警和结构化日志（CI 已落地：GitHub Actions 跑 pytest / 前端构建 / 泄漏检查；CD 仍在此列）。
 - 安全审计、prompt injection 测试、沙箱逃逸测试。
 - 性能/负载测试、配额与计费。
