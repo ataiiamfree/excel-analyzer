@@ -182,7 +182,7 @@ export default function ConversationPage() {
     stream.status === "connecting"
       ? "正在连接分析服务..."
       : stream.status === "reconnecting"
-        ? "连接中断，正在自动重连..."
+        ? stream.connectionError || "连接中断，正在自动重连..."
         : stream.status === "closed"
           ? stream.connectionError || "连接已断开"
           : stream.connectionError;
@@ -225,7 +225,10 @@ export default function ConversationPage() {
         onCancel={stream.cancel}
         onAttach={(file) => replaceFile.mutateAsync(file)}
         onReconnect={stream.reconnect}
-        reconnectAvailable={stream.status === "closed"}
+        reconnectAvailable={
+          stream.status === "closed" ||
+          (stream.status === "reconnecting" && Boolean(stream.connectionError))
+        }
       />
     </AppShell>
   );

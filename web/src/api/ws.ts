@@ -147,13 +147,18 @@ export function useConversationStream(conversationId: string) {
       ws.onclose = () => {
         if (disposed) return;
         socketRef.current = null;
-        if (retryCount < 3) {
-          retryCount += 1;
-          setStatus("reconnecting");
+        retryCount += 1;
+        setStatus("reconnecting");
+        // 前 3 次按 1s/2s/4s 快速退避应对瞬断；之后转入每 15 秒低频持续
+        // 重试，后端重启恢复后页面无需刷新即可自动接回。注意：重连只恢复
+        // 连接本身，断连期间被中断的分析不会续跑。
+        if (retryCount <= 3) {
           retryTimer = window.setTimeout(connect, 2 ** (retryCount - 1) * 1000);
         } else {
-          setStatus("closed");
-          setConnectionError("连接已断开，请检查后端服务后重连");
+          if (retryCount === 4) {
+            setConnectionError("后端暂不可用，每 15 秒自动重试中；恢复后无需刷新页面");
+          }
+          retryTimer = window.setTimeout(connect, 15_000);
         }
       };
       ws.onerror = () => ws.close();
