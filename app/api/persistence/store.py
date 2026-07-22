@@ -234,6 +234,10 @@ class Store:
             # 历史库中同 path 可能已有多行（旧版每次盲 INSERT），取最新一行
             # 作为承载行，其余旧行原样保留。
             if artifact_id is None and conversation_id is not None:
+                # RLock 只能串行化同一个 Store 实例。先取得 SQLite RESERVED
+                # write lock，再执行 SELECT + UPDATE/INSERT，才能避免多个
+                # Store/进程同时查无记录后各自插入一行。
+                self._conn.execute("BEGIN IMMEDIATE")
                 existing = self._conn.execute(
                     """
                     SELECT id FROM artifacts

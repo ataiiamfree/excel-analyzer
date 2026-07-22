@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+import threading
 import uuid
 
 from app.api.persistence.store import Store, utc_now_iso
@@ -131,3 +133,41 @@ def test_registration_without_conversation_never_dedupes(tmp_path):
     a = store.create_artifact(path="output/x.csv", kind="table", name="x.csv", size=1)
     b = store.create_artifact(path="output/x.csv", kind="table", name="x.csv", size=2)
     assert a["id"] != b["id"]
+
+
+def test_concurrent_store_connections_register_one_artifact(tmp_path):
+    """数据库级事务必须覆盖查找与插入，不能只依赖单实例 RLock。"""
+    db_path = tmp_path / "chat.sqlite3"
+    root = Store(db_path)
+    root.create_conversation(
+        title="并发测试",
+        file_name="book.xlsx",
+        file_size=1,
+        local_file_path="/tmp/book.xlsx",
+        conversation_id="conv-race",
+    )
+
+    stores = [Store(db_path) for _ in range(16)]
+    barrier = threading.Barrier(len(stores))
+
+    def register(store: Store) -> str:
+        barrier.wait()
+        return store.create_artifact(
+            conversation_id="conv-race",
+            path="output/same.csv",
+            kind="table",
+            name="same.csv",
+            size=1,
+        )["id"]
+
+    with ThreadPoolExecutor(max_workers=len(stores)) as pool:
+        artifact_ids = list(pool.map(register, stores))
+
+    assert len(set(artifact_ids)) == 1
+    assert root._conn.execute(
+        """
+        SELECT COUNT(*) FROM artifacts
+        WHERE conversation_id = ? AND path = ?
+        """,
+        ("conv-race", "output/same.csv"),
+    ).fetchone()[0] == 1
