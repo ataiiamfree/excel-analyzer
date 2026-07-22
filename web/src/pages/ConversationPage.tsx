@@ -225,10 +225,7 @@ export default function ConversationPage() {
         onCancel={stream.cancel}
         onAttach={(file) => replaceFile.mutateAsync(file)}
         onReconnect={stream.reconnect}
-        reconnectAvailable={
-          stream.status === "closed" ||
-          (stream.status === "reconnecting" && Boolean(stream.connectionError))
-        }
+        reconnectAvailable={stream.status === "closed" || stream.persistentRetry}
       />
     </AppShell>
   );
