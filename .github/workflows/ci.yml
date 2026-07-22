@@ -44,13 +44,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: 产品代码不得包含 benchmark 特征词
-        # 发布闸门口径：app/ 与 web/src/ 中出现 SheetBench 案例特征词
-        # 视为针对评测集的过拟合，直接失败。
+        # 发布闸门口径：只扫描产品运行时代码，拦截 benchmark 标识以及
+        # 历史上发生过泄漏的高特异性案例词。测试、评测脚本和文档不在
+        # 扫描范围内，因为它们需要合法引用 benchmark。
         run: |
-          hits=$(grep -riE 'sheetbench|realhit' app/ web/src/ || true)
-          if [ -n "$hits" ]; then
+          pattern='sheetbench|realhit|(^|[^[:alnum:]_])(press|snatch|jerk)([^[:alnum:]_]|$)|chats[[:space:]]+serviced'
+          if hits=$(grep -rniIE "$pattern" app/ web/src/); then
             echo "发现 benchmark 特征词泄漏："
             echo "$hits"
             exit 1
+          else
+            grep_status=$?
+            if [ "$grep_status" -ne 1 ]; then
+              echo "benchmark 泄漏检查执行失败（grep exit $grep_status）"
+              exit "$grep_status"
+            fi
           fi
+
           echo "无泄漏。"
