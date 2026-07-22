@@ -1,0 +1,64 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  backend:
+    name: Python tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: 安装依赖
+        run: pip install -r requirements.txt
+      - name: 全量 pytest
+        run: python -m pytest tests/ -q
+
+  frontend:
+    name: Web production build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: 安装依赖
+        run: npm ci --prefix web
+      - name: 生产构建（含 tsc 类型检查）
+        run: npm run build --prefix web
+
+  benchmark-leak:
+    name: Benchmark keyword leak check
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: 产品代码不得包含 benchmark 特征词
+        # 发布闸门口径：只扫描产品运行时代码，拦截 benchmark 标识以及
+        # 历史上发生过泄漏的高特异性案例词。测试、评测脚本和文档不在
+        # 扫描范围内，因为它们需要合法引用 benchmark。
+        run: |
+          pattern='sheetbench|realhit|(^|[^[:alnum:]_])(press|snatch|jerk)([^[:alnum:]_]|$)|chats[[:space:]]+serviced'
+          if hits=$(grep -rniIE "$pattern" app/ web/src/); then
+            echo "发现 benchmark 特征词泄漏："
+            echo "$hits"
+            exit 1
+          else
+            grep_status=$?
+            if [ "$grep_status" -ne 1 ]; then
+              echo "benchmark 泄漏检查执行失败（grep exit $grep_status）"
+              exit "$grep_status"
+            fi
+          fi
+
+          echo "无泄漏。"

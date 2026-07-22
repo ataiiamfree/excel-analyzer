@@ -104,6 +104,8 @@ make test
 make web-build
 ```
 
+推送到 `main` 或提交 PR 时，GitHub Actions 会自动执行三项检查（见 `.github/workflows/ci.yml`）：全量 pytest、前端生产构建（含 tsc 类型检查）、benchmark 泄漏哨兵检查（`app/` 与 `web/src/` 不得出现 benchmark 标识或已知高特异性案例词）。
+
 ## 项目结构
 
 ```
