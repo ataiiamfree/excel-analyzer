@@ -1886,5 +1886,6 @@ class UserMemory:
 - Pi runtime 使用 `<<FINAL_REPORT>>` 作为最终报告 marker。marker 之前的 `message_update.text_delta` 会进入 reasoning，不写入报告；marker 之后的文本才会写入 `report.delta`，避免执行过程污染最终报告。
 - `app/agent/pi_tool_service.py` 是 Pi 调用 Python typed tools 的命令行桥。Pi 负责主 agent loop、规划和最终表达；Excel 解析、sandbox、结果校验和 Artifact Graph 写入仍由 Python 后端工具执行。
 - `Workspace.register_artifact()` 和 API persistence 已扩展 Artifact Graph v1 字段，包括 `artifact_id`、`producer_step_id`、`producer_tool`、`input_artifact_ids`、`source_tables`、`script_path`、`stdout_summary`、`chart_metadata` 和 `sha256`。
+- SQLite `Store.create_artifact` 按 `(conversation_id, path)` 幂等：follow-up 重跑同一产物路径时复用已有登记行（保留原 `id` 与 `created_at`，历史消息 payload 中的 `artifact_ids` 保持可解析），只刷新 `message_id`/`size`/`sha256`/`metadata` 等内容属性。自动幂等路径在查询前使用 `BEGIN IMMEDIATE` 取得数据库写锁，使多个 Store/SQLite 连接之间的查找与写入保持原子；迁移只新增非唯一索引 `idx_artifacts_conversation_path`，旧版盲 INSERT 留下的重复行不删除，最新一行作为后续登记的承载行。显式传入 `artifact_id` 或无 `conversation_id` 的登记保持直接插入语义。
 
 这部分实现的边界是：生产环境需要安装 Pi CLI 或配置兼容的 `PI_COMMAND`，并准备可用模型凭证；如果 Pi 不可用，任务会失败并暴露明确错误，不再回退到旧 Orchestrator。Milestone 7 中的非 Excel 数据源和更多办公输出形态尚未展开。

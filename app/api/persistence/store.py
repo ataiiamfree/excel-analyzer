@@ -79,6 +79,15 @@ class Store:
             }
             if "metadata" not in columns:
                 self._conn.execute("ALTER TABLE artifacts ADD COLUMN metadata TEXT NOT NULL DEFAULT '{}'")
+            # 幂等登记的查找索引。刻意用非唯一索引：历史库可能已存在同
+            # (conversation_id, path) 的重复行，唯一索引会让迁移失败，而这些
+            # 旧行的 id 被消息 payload 的 artifact_ids 引用着，不能删。
+            self._conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_artifacts_conversation_path
+                ON artifacts (conversation_id, path)
+                """
+            )
 
     def create_conversation(
         self,
@@ -216,9 +225,39 @@ class Store:
         message_id: str | None = None,
         artifact_id: str | None = None,
     ) -> dict[str, Any]:
-        aid = artifact_id or f"art_{uuid.uuid4().hex}"
         now = utc_now_iso()
+        metadata_json = json.dumps(metadata or {}, ensure_ascii=False, default=str)
         with self._lock, self._conn:
+            # 同一会话内同一 path 幂等：follow-up 重跑覆盖的是 workspace 里的
+            # 同一个文件，因此复用已有登记行（保留原 id 与 created_at，历史
+            # 消息 payload 里的 artifact_ids 继续可解析），只刷新内容属性。
+            # 历史库中同 path 可能已有多行（旧版每次盲 INSERT），取最新一行
+            # 作为承载行，其余旧行原样保留。
+            if artifact_id is None and conversation_id is not None:
+                # RLock 只能串行化同一个 Store 实例。先取得 SQLite RESERVED
+                # write lock，再执行 SELECT + UPDATE/INSERT，才能避免多个
+                # Store/进程同时查无记录后各自插入一行。
+                self._conn.execute("BEGIN IMMEDIATE")
+                existing = self._conn.execute(
+                    """
+                    SELECT id FROM artifacts
+                    WHERE conversation_id = ? AND path = ?
+                    ORDER BY created_at DESC, rowid DESC LIMIT 1
+                    """,
+                    (conversation_id, path),
+                ).fetchone()
+                if existing is not None:
+                    self._conn.execute(
+                        """
+                        UPDATE artifacts
+                        SET message_id = ?, kind = ?, name = ?, size = ?,
+                            sha256 = ?, metadata = ?
+                        WHERE id = ?
+                        """,
+                        (message_id, kind, name, size, sha256, metadata_json, existing["id"]),
+                    )
+                    return self.get_artifact(existing["id"])
+            aid = artifact_id or f"art_{uuid.uuid4().hex}"
             self._conn.execute(
                 """
                 INSERT INTO artifacts
@@ -234,7 +273,7 @@ class Store:
                     name,
                     size,
                     sha256,
-                    json.dumps(metadata or {}, ensure_ascii=False, default=str),
+                    metadata_json,
                     now,
                 ),
             )
