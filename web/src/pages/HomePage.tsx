@@ -1,5 +1,5 @@
-import { ChangeEvent, FormEvent, KeyboardEvent, useState } from "react";
-import { Menu, SendHorizontal, UploadCloud } from "lucide-react";
+import { ChangeEvent, DragEvent, FormEvent, KeyboardEvent, MouseEvent, useRef, useState } from "react";
+import { Menu, SendHorizontal, UploadCloud, X } from "lucide-react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 
@@ -18,6 +18,8 @@ export default function HomePage() {
   const [file, setFile] = useState<File | null>(null);
   const [query, setQuery] = useState("");
   const [fileError, setFileError] = useState("");
+  const [dragActive, setDragActive] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
   const mobileSidebarOpen = useUiStore((state) => state.mobileSidebarOpen);
   const setMobileSidebarOpen = useUiStore((state) => state.setMobileSidebarOpen);
   const conversations = useQuery({ queryKey: ["conversations"], queryFn: fetchConversations });
@@ -36,22 +38,67 @@ export default function HomePage() {
     }
   });
 
-  const onFile = (event: ChangeEvent<HTMLInputElement>) => {
-    const nextFile = event.target.files?.[0] ?? null;
+  // 点击选择与拖拽放下共用同一套校验逻辑；返回是否被接受。
+  const acceptFile = (nextFile: File | null): boolean => {
     if (!nextFile) {
       setFile(null);
       setFileError("");
-      return;
+      return false;
     }
     try {
       validateExcelFile(nextFile);
       setFile(nextFile);
       setFileError("");
+      return true;
     } catch (error) {
       setFile(null);
       setFileError(error instanceof Error ? error.message : "无法上传该文件");
-      event.target.value = "";
+      return false;
     }
+  };
+
+  const onFile = (event: ChangeEvent<HTMLInputElement>) => {
+    const accepted = acceptFile(event.target.files?.[0] ?? null);
+    // 校验失败时清空 input，便于重新选择同名文件。
+    if (!accepted) event.target.value = "";
+  };
+
+  const onDragOver = (event: DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    if (!dragActive) setDragActive(true);
+  };
+
+  const onDragLeave = (event: DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    // 仅在指针真正离开投放区（而非在其子元素间移动）时取消高亮。
+    if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
+    setDragActive(false);
+  };
+
+  const onDrop = (event: DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    setDragActive(false);
+    acceptFile(event.dataTransfer.files?.[0] ?? null);
+  };
+
+  const openFilePicker = () => {
+    inputRef.current?.click();
+  };
+
+  const onDropzoneKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    event.preventDefault();
+    inputRef.current?.click();
+  };
+
+  const clearFile = (event: MouseEvent<HTMLButtonElement>) => {
+    // 阻止冒泡到 label，否则会顺带打开文件选择器。
+    event.preventDefault();
+    event.stopPropagation();
+    setFile(null);
+    setFileError("");
+    // 重置隐藏 input，使重新选择同一个文件也能触发 change。
+    if (inputRef.current) inputRef.current.value = "";
   };
 
   const submitForm = () => {
@@ -104,16 +151,38 @@ export default function HomePage() {
           <span>结果可下载</span>
         </div>
         <form className="upload-panel" onSubmit={submit}>
-          <label className={`upload-drop ${file ? "file-ready" : ""}`}>
+          <div
+            className={`upload-drop ${file ? "file-ready" : ""} ${dragActive ? "drag-active" : ""}`}
+            role="button"
+            tabIndex={0}
+            onClick={openFilePicker}
+            onKeyDown={onDropzoneKeyDown}
+            onDragOver={onDragOver}
+            onDragEnter={onDragOver}
+            onDragLeave={onDragLeave}
+            onDrop={onDrop}
+          >
             <UploadCloud size={24} />
-            <span>{file ? `已就绪 · ${file.name}` : "选择 .xlsx / .xlsm 文件"}</span>
+            <span>
+              {dragActive
+                ? "松开鼠标即可上传"
+                : file
+                  ? `已就绪 · ${file.name}`
+                  : "点击选择，或将 .xlsx / .xlsm 文件拖到这里"}
+            </span>
+            {file && !dragActive ? (
+              <button type="button" className="upload-clear" title="移除文件" onClick={clearFile}>
+                <X size={16} />
+              </button>
+            ) : null}
             <input
+              ref={inputRef}
               type="file"
               accept=".xlsx,.xlsm"
               onChange={onFile}
-              style={{ position: "absolute", opacity: 0, pointerEvents: "none" }}
+              style={{ display: "none" }}
             />
-          </label>
+          </div>
           <textarea
             value={query}
             onChange={(event) => setQuery(event.target.value)}

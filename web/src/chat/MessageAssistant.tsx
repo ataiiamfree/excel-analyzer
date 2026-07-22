@@ -1,5 +1,5 @@
-import { useMemo, useState } from "react";
-import { Check, Copy, FileDown, RotateCcw } from "lucide-react";
+import { useMemo, useRef, useState } from "react";
+import { Check, Copy, FileDown, FileText, RotateCcw } from "lucide-react";
 
 import type { Artifact, AssistantMessagePayload } from "../api/types";
 import ArtifactChips from "./ArtifactChips";
@@ -7,6 +7,16 @@ import PlanBlock from "./PlanBlock";
 import ProgressLine from "./ProgressLine";
 import ReasoningCapsule from "./ReasoningCapsule";
 import ReportArticle from "./ReportArticle";
+import { exportReportPdf } from "./exportPdf";
+
+const ARTIFACT_KIND_LABELS: Record<string, string> = {
+  csv: "CSV",
+  excel: "Excel",
+  data: "数据",
+  normalized_table: "规整表",
+  report: "报告",
+  file: "文件"
+};
 
 interface MessageAssistantProps {
   payload: AssistantMessagePayload;
@@ -99,6 +109,8 @@ export default function MessageAssistant({
   onRegenerate
 }: MessageAssistantProps) {
   const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
+  const [pdfState, setPdfState] = useState<"idle" | "blocked">("idle");
+  const reportRef = useRef<HTMLDivElement>(null);
   const visibleArtifacts = useMemo(
     () => artifacts.filter((artifact) => payload.artifact_ids?.includes(artifact.id)),
     [artifacts, payload.artifact_ids]
@@ -107,6 +119,7 @@ export default function MessageAssistant({
   const canRegenerate = canAct && !actionsDisabled && Boolean(payload.query.trim()) && Boolean(onRegenerate);
   const canCopy = canAct && Boolean((payload.report || payload.error?.summary || "").trim());
   const canExport = canAct && (canCopy || visibleArtifacts.length > 0);
+  const canExportPdf = canAct && Boolean(payload.report?.trim());
 
   const copyText = async () => {
     if (!canCopy) return;
@@ -135,6 +148,33 @@ export default function MessageAssistant({
     window.setTimeout(() => URL.revokeObjectURL(url), 1000);
   };
 
+  const exportPdf = () => {
+    if (!canExportPdf) return;
+    const reportHtml = reportRef.current?.querySelector(".report")?.innerHTML;
+    if (!reportHtml) return;
+    const charts = visibleArtifacts
+      .filter((artifact) => artifact.kind === "chart")
+      .map((artifact) => ({ name: artifact.name, url: artifactUrl(artifact) }));
+    const dataArtifacts = visibleArtifacts
+      .filter((artifact) => artifact.kind !== "chart")
+      .map((artifact) => ({
+        name: artifact.name,
+        kindLabel: ARTIFACT_KIND_LABELS[artifact.kind] ?? artifact.kind
+      }));
+    const opened = exportReportPdf({
+      reportHtml,
+      query: payload.query,
+      statusLabel: timeLabel(payload, createdAt, live),
+      durationMs: Number(payload.metrics?.duration_ms ?? 0),
+      charts,
+      dataArtifacts
+    });
+    if (!opened) {
+      setPdfState("blocked");
+      window.setTimeout(() => setPdfState("idle"), 2600);
+    }
+  };
+
   return (
     <div className="msg assistant">
       <div className="assistant-head">
@@ -146,7 +186,11 @@ export default function MessageAssistant({
       <ReasoningCapsule reasoning={payload.reasoning} active={payload.status === "running"} />
       <PlanBlock payload={payload} />
       {payload.status === "running" ? <ProgressLine payload={payload} /> : null}
-      {payload.report ? <ReportArticle markdown={payload.report} /> : null}
+      {payload.report ? (
+        <div ref={reportRef}>
+          <ReportArticle markdown={payload.report} />
+        </div>
+      ) : null}
       {payload.error ? (
         <div className="progress-line">
           <span />
@@ -169,8 +213,11 @@ export default function MessageAssistant({
           {copyState === "copied" ? <Check size={13} /> : <Copy size={13} />}
           {copyState === "copied" ? "已复制" : copyState === "failed" ? "复制失败" : "复制"}
         </button>
-        <button title="导出" onClick={exportReport} disabled={!canExport}>
+        <button title="导出 Markdown" onClick={exportReport} disabled={!canExport}>
           <FileDown size={13} /> 导出
+        </button>
+        <button title="导出 PDF（浏览器另存为 PDF）" onClick={exportPdf} disabled={!canExportPdf}>
+          <FileText size={13} /> {pdfState === "blocked" ? "请允许弹窗" : "PDF"}
         </button>
       </div>
     </div>
