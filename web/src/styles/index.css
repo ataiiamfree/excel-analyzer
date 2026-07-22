@@ -353,8 +353,9 @@ table.dt tbody tr:hover { background: var(--accent-soft); }
 .home-capabilities { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 22px; }
 .home-capabilities span { padding: 5px 9px; border: 1px solid var(--rule); border-radius: 999px; background: rgba(253,251,247,.72); color: var(--ink-3); font-size: 11.5px; }
 .upload-panel { background: var(--bg-elev); border: 1px solid var(--rule-2); border-radius: 14px; box-shadow: var(--shadow-pop); padding: 18px; }
-.upload-drop { border: 1px dashed var(--rule-2); border-radius: 10px; background: var(--bg); padding: 20px; display: flex; align-items: center; gap: 12px; color: var(--ink-3); }
+.upload-drop { border: 1px dashed var(--rule-2); border-radius: 10px; background: var(--bg); padding: 20px; display: flex; align-items: center; gap: 12px; color: var(--ink-3); transition: border-color .15s ease, background .15s ease, color .15s ease; }
 .upload-drop.file-ready { border-style: solid; border-color: #b8d0c5; background: var(--jade-soft); color: var(--jade); }
+.upload-drop.drag-active { border-style: solid; border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
 .upload-panel textarea { width: 100%; min-height: 112px; border: 1px solid var(--rule); background: #fff; color: var(--ink); outline: none; border-radius: 10px; padding: 13px 14px; resize: vertical; margin-top: 14px; }
 .example-queries { margin-top: 12px; }
 .example-label { display: block; margin-bottom: 7px; color: var(--ink-4); font-family: var(--mono); font-size: 10px; letter-spacing: .08em; }
