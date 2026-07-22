@@ -1,5 +1,5 @@
-import { ChangeEvent, DragEvent, FormEvent, KeyboardEvent, useState } from "react";
-import { Menu, SendHorizontal, UploadCloud } from "lucide-react";
+import { ChangeEvent, DragEvent, FormEvent, KeyboardEvent, MouseEvent, useRef, useState } from "react";
+import { Menu, SendHorizontal, UploadCloud, X } from "lucide-react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 
@@ -19,6 +19,7 @@ export default function HomePage() {
   const [query, setQuery] = useState("");
   const [fileError, setFileError] = useState("");
   const [dragActive, setDragActive] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
   const mobileSidebarOpen = useUiStore((state) => state.mobileSidebarOpen);
   const setMobileSidebarOpen = useUiStore((state) => state.setMobileSidebarOpen);
   const conversations = useQuery({ queryKey: ["conversations"], queryFn: fetchConversations });
@@ -78,6 +79,16 @@ export default function HomePage() {
     event.preventDefault();
     setDragActive(false);
     acceptFile(event.dataTransfer.files?.[0] ?? null);
+  };
+
+  const clearFile = (event: MouseEvent<HTMLButtonElement>) => {
+    // 阻止冒泡到 label，否则会顺带打开文件选择器。
+    event.preventDefault();
+    event.stopPropagation();
+    setFile(null);
+    setFileError("");
+    // 重置隐藏 input，使重新选择同一个文件也能触发 change。
+    if (inputRef.current) inputRef.current.value = "";
   };
 
   const submitForm = () => {
@@ -145,7 +156,13 @@ export default function HomePage() {
                   ? `已就绪 · ${file.name}`
                   : "点击选择，或将 .xlsx / .xlsm 文件拖到这里"}
             </span>
+            {file && !dragActive ? (
+              <button type="button" className="upload-clear" title="移除文件" onClick={clearFile}>
+                <X size={16} />
+              </button>
+            ) : null}
             <input
+              ref={inputRef}
               type="file"
               accept=".xlsx,.xlsm"
               onChange={onFile}
