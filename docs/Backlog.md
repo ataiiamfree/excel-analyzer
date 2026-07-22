@@ -13,7 +13,7 @@
 
 ## Robustness
 
-- WebSocket 延长自动重连窗口，或在服务恢复后持续低频重试。
+- ~~WebSocket 延长自动重连窗口，或在服务恢复后持续低频重试~~（已实现：3 次快速退避后每 15 秒持续重试，后端恢复后无需刷新自动接回；断连期间被中断的分析不续跑）。
 - 为 Pi sidecar 增加操作系统级 workspace 写入隔离；当前 v0.9 已隔离 context、限制工具并阻断 Git。
 - 为 typed tool service 提供原生 Pi custom tool，替换通用 bash bridge。
 - workspace TTL/GC、磁盘空间预警、跨进程任务恢复。

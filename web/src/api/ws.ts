@@ -117,6 +117,7 @@ export function useConversationStream(conversationId: string) {
   const [livePayload, setLivePayload] = useState<AssistantMessagePayload | null>(null);
   const [pendingUserMessage, setPendingUserMessage] = useState<Message | null>(null);
   const [connectionError, setConnectionError] = useState("");
+  const [persistentRetry, setPersistentRetry] = useState(false);
   const [reconnectKey, setReconnectKey] = useState(0);
 
   const wsUrl = useMemo(() => {
@@ -132,6 +133,7 @@ export function useConversationStream(conversationId: string) {
     setLivePayload(null);
     setPendingUserMessage(null);
     setConnectionError("");
+    setPersistentRetry(false);
     setStatus("connecting");
 
     const connect = () => {
@@ -142,18 +144,26 @@ export function useConversationStream(conversationId: string) {
       ws.onopen = () => {
         retryCount = 0;
         setConnectionError("");
+        setPersistentRetry(false);
         setStatus("open");
       };
       ws.onclose = () => {
         if (disposed) return;
         socketRef.current = null;
-        if (retryCount < 3) {
-          retryCount += 1;
-          setStatus("reconnecting");
+        retryCount += 1;
+        setStatus("reconnecting");
+        // 前 3 次按 1s/2s/4s 快速退避应对瞬断；之后转入每 15 秒低频持续
+        // 重试，后端重启恢复后页面无需刷新即可自动接回。注意：重连只恢复
+        // 连接本身，断连期间被中断的分析不会续跑。
+        if (retryCount <= 3) {
+          // connectionError 也承载服务端业务错误；进入重连后先清掉，避免
+          // 把旧的 run_in_progress/no_active_run 误当成连接状态。
+          setConnectionError("");
           retryTimer = window.setTimeout(connect, 2 ** (retryCount - 1) * 1000);
         } else {
-          setStatus("closed");
-          setConnectionError("连接已断开，请检查后端服务后重连");
+          setPersistentRetry(true);
+          setConnectionError("后端暂不可用，每 15 秒自动重试中；恢复后无需刷新页面");
+          retryTimer = window.setTimeout(connect, 15_000);
         }
       };
       ws.onerror = () => ws.close();
@@ -219,6 +229,7 @@ export function useConversationStream(conversationId: string) {
     connectionError,
     livePayload,
     pendingUserMessage,
+    persistentRetry,
     sendMessage,
     cancel,
     reconnect
