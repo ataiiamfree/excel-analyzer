@@ -63,22 +63,32 @@ export default function HomePage() {
     if (!accepted) event.target.value = "";
   };
 
-  const onDragOver = (event: DragEvent<HTMLLabelElement>) => {
+  const onDragOver = (event: DragEvent<HTMLDivElement>) => {
     event.preventDefault();
     if (!dragActive) setDragActive(true);
   };
 
-  const onDragLeave = (event: DragEvent<HTMLLabelElement>) => {
+  const onDragLeave = (event: DragEvent<HTMLDivElement>) => {
     event.preventDefault();
     // 仅在指针真正离开投放区（而非在其子元素间移动）时取消高亮。
     if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
     setDragActive(false);
   };
 
-  const onDrop = (event: DragEvent<HTMLLabelElement>) => {
+  const onDrop = (event: DragEvent<HTMLDivElement>) => {
     event.preventDefault();
     setDragActive(false);
     acceptFile(event.dataTransfer.files?.[0] ?? null);
+  };
+
+  const openFilePicker = () => {
+    inputRef.current?.click();
+  };
+
+  const onDropzoneKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    event.preventDefault();
+    inputRef.current?.click();
   };
 
   const clearFile = (event: MouseEvent<HTMLButtonElement>) => {
@@ -141,8 +151,12 @@ export default function HomePage() {
           <span>结果可下载</span>
         </div>
         <form className="upload-panel" onSubmit={submit}>
-          <label
+          <div
             className={`upload-drop ${file ? "file-ready" : ""} ${dragActive ? "drag-active" : ""}`}
+            role="button"
+            tabIndex={0}
+            onClick={openFilePicker}
+            onKeyDown={onDropzoneKeyDown}
             onDragOver={onDragOver}
             onDragEnter={onDragOver}
             onDragLeave={onDragLeave}
@@ -166,9 +180,9 @@ export default function HomePage() {
               type="file"
               accept=".xlsx,.xlsm"
               onChange={onFile}
-              style={{ position: "absolute", opacity: 0, pointerEvents: "none" }}
+              style={{ display: "none" }}
             />
-          </label>
+          </div>
           <textarea
             value={query}
             onChange={(event) => setQuery(event.target.value)}

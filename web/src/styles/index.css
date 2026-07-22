@@ -353,7 +353,8 @@ table.dt tbody tr:hover { background: var(--accent-soft); }
 .home-capabilities { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 22px; }
 .home-capabilities span { padding: 5px 9px; border: 1px solid var(--rule); border-radius: 999px; background: rgba(253,251,247,.72); color: var(--ink-3); font-size: 11.5px; }
 .upload-panel { background: var(--bg-elev); border: 1px solid var(--rule-2); border-radius: 14px; box-shadow: var(--shadow-pop); padding: 18px; }
-.upload-drop { border: 1px dashed var(--rule-2); border-radius: 10px; background: var(--bg); padding: 20px; display: flex; align-items: center; gap: 12px; color: var(--ink-3); transition: border-color .15s ease, background .15s ease, color .15s ease; }
+.upload-drop { border: 1px dashed var(--rule-2); border-radius: 10px; background: var(--bg); padding: 20px; display: flex; align-items: center; gap: 12px; color: var(--ink-3); cursor: pointer; transition: border-color .15s ease, background .15s ease, color .15s ease; }
+.upload-drop:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .upload-drop.file-ready { border-style: solid; border-color: #b8d0c5; background: var(--jade-soft); color: var(--jade); }
 .upload-drop.drag-active { border-style: solid; border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
 .upload-clear { margin-left: auto; display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; flex-shrink: 0; border-radius: 7px; border: 1px solid var(--rule-2); background: transparent; color: var(--ink-3); cursor: pointer; transition: border-color .12s ease, color .12s ease, background .12s ease; }
